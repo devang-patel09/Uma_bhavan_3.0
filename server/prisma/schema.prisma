@@ -1,0 +1,238 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  OPERATOR
+}
+
+enum MemberType {
+  PERMANENT
+  NOMINAL
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum BloodGroup {
+  A_POSITIVE
+  A_NEGATIVE
+  B_POSITIVE
+  B_NEGATIVE
+  AB_POSITIVE
+  AB_NEGATIVE
+  O_POSITIVE
+  O_NEGATIVE
+  UNKNOWN
+}
+
+enum MaritalStatus {
+  MARRIED
+  UNMARRIED
+}
+
+enum ReceiptStatus {
+  ACTIVE
+  CANCELLED
+}
+
+model User {
+  id                  String       @id @default(uuid())
+  username            String       @unique
+  passwordHash        String
+  role                Role         @default(SUPER_ADMIN)
+  active              Boolean      @default(true)
+  recoveryCodeHash    String?
+  failedLoginAttempts Int          @default(0)
+  lockUntil           DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  receiptsCreated     Receipt[]
+  auditLogs           AuditLog[]
+  backupRecords       BackupRecord[]
+  migrationsCreated   MigrationLog[]
+
+  @@map("users")
+}
+
+model Area {
+  id             String         @id @default(uuid())
+  nameNormalized String         @unique
+  displayName    String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  firms          Firm[]
+
+  @@map("areas")
+}
+
+model Surname {
+  id                 String             @id @default(uuid())
+  nameNormalized     String             @unique
+  displayName        String
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  memberRecords      MemberRecord[]     @relation("FamilySurname")
+  individualMembers  IndividualMember[] @relation("ParentalSurname")
+
+  @@map("surnames")
+}
+
+model Firm {
+  id            String         @id @default(uuid())
+  firmCode      String         @unique // Format: F001, F002...
+  firmName      String
+  areaId        String
+  area          Area           @relation(fields: [areaId], references: [id], onDelete: Restrict)
+  pincode       String
+  address       String         @db.Text
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  memberRecords MemberRecord[]
+
+  @@index([firmName])
+  @@index([areaId])
+  @@map("firms")
+}
+
+model MemberRecord {
+  id              String             @id @default(uuid())
+  memberCode      String             @unique // Format: M001... (Permanent) or N001... (Nominal)
+  memberType      MemberType
+  familyId        String             @unique // Manually entered unique family identifier
+  familyHeadName  String
+  surnameId       String
+  surname         Surname            @relation("FamilySurname", fields: [surnameId], references: [id], onDelete: Restrict)
+  homeAddress     String             @db.Text
+  firmId          String
+  firm            Firm               @relation(fields: [firmId], references: [id], onDelete: Restrict)
+  male18PlusCount Int                @default(0)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  members         IndividualMember[]
+
+  @@index([memberCode])
+  @@index([familyId])
+  @@index([firmId])
+  @@index([memberType])
+  @@index([surnameId])
+  @@map("member_records")
+}
+
+model IndividualMember {
+  id                String        @id @default(uuid())
+  familyRecordId    String
+  familyRecord      MemberRecord  @relation(fields: [familyRecordId], references: [id], onDelete: Cascade)
+  name              String
+  dob               DateTime      @db.Date
+  gender            Gender
+  mobile            String
+  bloodGroup        BloodGroup    @default(UNKNOWN)
+  maritalStatus     MaritalStatus @default(UNMARRIED)
+  parentalSurnameId String?
+  parentalSurname   Surname?      @relation("ParentalSurname", fields: [parentalSurnameId], references: [id], onDelete: SetNull)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  receipts          Receipt[]
+
+  @@index([familyRecordId])
+  @@index([name])
+  @@index([dob])
+  @@index([gender])
+  @@index([mobile])
+  @@map("individual_members")
+}
+
+model ReceiptType {
+  id              String    @id @default(uuid())
+  name            String    @unique // e.g. "Yuvak Mandal", "Samaj"
+  defaultAmount   Decimal   @db.Decimal(10, 2)
+  active          Boolean   @default(true)
+  eligibilityRule String?   // JSON rule string or identifier
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  receipts        Receipt[]
+
+  @@map("receipt_types")
+}
+
+model Receipt {
+  id                 String           @id @default(uuid())
+  receiptNumber      String           @unique // Format: R000001, R000002...
+  individualMemberId String
+  individualMember   IndividualMember @relation(fields: [individualMemberId], references: [id], onDelete: Restrict)
+  receiptTypeId      String
+  receiptType        ReceiptType      @relation(fields: [receiptTypeId], references: [id], onDelete: Restrict)
+  amount             Decimal          @db.Decimal(10, 2)
+  generatedAt        DateTime         @default(now())
+  status             ReceiptStatus    @default(ACTIVE)
+  createdById        String
+  createdBy          User             @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  verificationHash   String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([receiptNumber])
+  @@index([individualMemberId])
+  @@index([receiptTypeId])
+  @@index([generatedAt])
+  @@index([status])
+  @@map("receipts")
+}
+
+model MigrationLog {
+  id                       String    @id @default(uuid())
+  sourceMemberRecordId     String
+  destinationMemberRecordId String
+  sourceFirmId             String
+  destinationFirmId        String
+  migratedMemberCount      Int
+  migratedAt               DateTime  @default(now())
+  createdById              String
+  createdBy                User      @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  metadata                 String?   @db.Text
+
+  @@index([migratedAt])
+  @@map("migration_logs")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  module     String
+  action     String
+  entityType String?
+  entityId   String?
+  occurredAt DateTime @default(now())
+  metadata   String?  @db.Text
+
+  @@index([occurredAt])
+  @@index([userId])
+  @@index([module])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model BackupRecord {
+  id            String   @id @default(uuid())
+  createdById   String
+  createdBy     User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt     DateTime @default(now())
+  backupType    String   // MANUAL, PRE_RESTORE_SAFETY
+  checksum      String
+  schemaVersion String
+  fileName      String
+
+  @@index([createdAt])
+  @@map("backup_records")
+}
