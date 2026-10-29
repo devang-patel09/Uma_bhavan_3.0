@@ -7,13 +7,14 @@ import { CreateFirmInput, UpdateFirmInput } from '../schemas/master.schema.js';
 export interface FirmQueryOptions {
   search?: string;
   areaId?: string;
+  firmType?: 'PERMANENT' | 'NOMINAL';
   page?: number;
   limit?: number;
 }
 
 export class FirmService {
   public static async getAll(options: FirmQueryOptions = {}) {
-    const { search, areaId, page = 1, limit = 50 } = options;
+    const { search, areaId, firmType, page = 1, limit = 50 } = options;
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {};
@@ -22,11 +23,16 @@ export class FirmService {
       where.areaId = areaId;
     }
 
+    if (firmType) {
+      where.firmType = firmType;
+    }
+
     if (search) {
       const term = search.trim();
       where.OR = [
         { firmCode: { contains: term } },
         { firmName: { contains: term } },
+        { familyHeadName: { contains: term } },
         { address: { contains: term } },
       ];
     }
@@ -40,6 +46,9 @@ export class FirmService {
         take: limit,
         include: {
           area: {
+            select: { id: true, displayName: true },
+          },
+          subArea: {
             select: { id: true, displayName: true },
           },
           _count: {
@@ -58,8 +67,12 @@ export class FirmService {
         id: f.id,
         firmCode: f.firmCode,
         firmName: f.firmName,
+        firmType: f.firmType,
+        familyHeadName: f.familyHeadName,
         areaId: f.areaId,
         areaName: f.area.displayName,
+        subAreaId: f.subAreaId,
+        subAreaName: f.subArea?.displayName || null,
         pincode: f.pincode,
         address: f.address,
         familiesCount: f._count.memberRecords,
@@ -74,6 +87,7 @@ export class FirmService {
       where: { id },
       include: {
         area: true,
+        subArea: true,
         memberRecords: {
           select: {
             id: true,
@@ -104,6 +118,16 @@ export class FirmService {
       throw new AppError('Selected Area does not exist.', 400, 'INVALID_AREA');
     }
 
+    // Validate SubArea if provided
+    if (input.subAreaId) {
+      const subArea = await prisma.subArea.findUnique({
+        where: { id: input.subAreaId },
+      });
+      if (!subArea || subArea.areaId !== input.areaId) {
+        throw new AppError('Selected Sub-Area does not belong to the selected Main Area.', 400, 'INVALID_SUB_AREA');
+      }
+    }
+
     // Auto-generate next code (F001, F002...) with gap reuse
     const firmCode = await CodeGenerator.getNextFirmCode();
 
@@ -111,11 +135,14 @@ export class FirmService {
       data: {
         firmCode,
         firmName: input.firmName.trim(),
+        firmType: input.firmType || 'PERMANENT',
+        familyHeadName: (input.familyHeadName || '').trim(),
         areaId: input.areaId,
+        subAreaId: input.subAreaId || null,
         pincode: input.pincode.trim(),
         address: input.address.trim(),
       },
-      include: { area: true },
+      include: { area: true, subArea: true },
     });
 
     await AuditService.log({
@@ -124,7 +151,7 @@ export class FirmService {
       action: 'CREATE',
       entityType: 'Firm',
       entityId: firm.id,
-      metadata: { firmCode: firm.firmCode, firmName: firm.firmName },
+      metadata: { firmCode: firm.firmCode, firmName: firm.firmName, firmType: firm.firmType },
     });
 
     return firm;
@@ -139,6 +166,8 @@ export class FirmService {
       throw new AppError('Firm not found.', 404, 'NOT_FOUND');
     }
 
+    const targetAreaId = input.areaId || existing.areaId;
+
     if (input.areaId) {
       const area = await prisma.area.findUnique({
         where: { id: input.areaId },
@@ -148,16 +177,40 @@ export class FirmService {
       }
     }
 
-    // Note: firmCode is NOT editable per PRD Section 4
-    const updated = await prisma.firm.update({
-      where: { id },
-      data: {
-        firmName: input.firmName ? input.firmName.trim() : undefined,
-        areaId: input.areaId,
-        pincode: input.pincode ? input.pincode.trim() : undefined,
-        address: input.address ? input.address.trim() : undefined,
-      },
-      include: { area: true },
+    if (input.subAreaId) {
+      const subArea = await prisma.subArea.findUnique({
+        where: { id: input.subAreaId },
+      });
+      if (!subArea || subArea.areaId !== targetAreaId) {
+        throw new AppError('Selected Sub-Area does not belong to the specified Main Area.', 400, 'INVALID_SUB_AREA');
+      }
+    }
+
+    // Transactionally update firm and ensure member records stay consistent if firmType changes
+    const updated = await prisma.$transaction(async (tx) => {
+      const firmUpdated = await tx.firm.update({
+        where: { id },
+        data: {
+          firmName: input.firmName ? input.firmName.trim() : undefined,
+          firmType: input.firmType,
+          familyHeadName: input.familyHeadName !== undefined ? input.familyHeadName.trim() : undefined,
+          areaId: input.areaId,
+          subAreaId: input.subAreaId !== undefined ? input.subAreaId : undefined,
+          pincode: input.pincode ? input.pincode.trim() : undefined,
+          address: input.address ? input.address.trim() : undefined,
+        },
+        include: { area: true, subArea: true },
+      });
+
+      // If firmType changed, update all linked family records to inherit the new classification
+      if (input.firmType && input.firmType !== existing.firmType) {
+        await tx.memberRecord.updateMany({
+          where: { firmId: id },
+          data: { memberType: input.firmType },
+        });
+      }
+
+      return firmUpdated;
     });
 
     await AuditService.log({
@@ -166,7 +219,7 @@ export class FirmService {
       action: 'EDIT',
       entityType: 'Firm',
       entityId: updated.id,
-      metadata: { firmCode: updated.firmCode, firmName: updated.firmName },
+      metadata: { firmCode: updated.firmCode, firmName: updated.firmName, firmType: updated.firmType },
     });
 
     return updated;
@@ -213,3 +266,4 @@ export class FirmService {
     };
   }
 }
+

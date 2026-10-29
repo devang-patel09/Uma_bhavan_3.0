@@ -44,17 +44,23 @@ export class DataOpsService {
         return {
           type: 'firms',
           filename: 'Uma_Bhavan_Firm_Template.csv',
-          headers: ['Firm Name', 'Area Name', 'Pincode', 'Address'],
+          headers: ['Firm Name', 'Firm Type (PERMANENT/NOMINAL)', 'Area Name', 'Sub-Area Name', 'Family Head Name', 'Pincode', 'Address'],
           sampleRows: [
             {
               'Firm Name': 'Shree Umiya Krushi Kendra',
+              'Firm Type (PERMANENT/NOMINAL)': 'PERMANENT',
               'Area Name': 'Station Road',
+              'Sub-Area Name': 'Station West',
+              'Family Head Name': 'Patel Kiritbhai Somabhai',
               Pincode: '388001',
               Address: 'Shop 12, APMC Market, Anand',
             },
             {
               'Firm Name': 'Sardar Patel Hardware Stores',
+              'Firm Type (PERMANENT/NOMINAL)': 'NOMINAL',
               'Area Name': 'Gamdi Vad',
+              'Sub-Area Name': '',
+              'Family Head Name': 'Patel Rameshchandra',
               Pincode: '388001',
               Address: 'Opp. Tower, Gamdi Vad, Anand',
             },
@@ -166,23 +172,51 @@ export class DataOpsService {
         }
       });
     } else if (type === 'firms') {
-      const areas = await prisma.area.findMany();
-      const areaMap = new Map(areas.map((a) => [a.displayName.toLowerCase(), a.id]));
+      const areas = await prisma.area.findMany({
+        include: { subAreas: true },
+      });
+      const areaMap = new Map(areas.map((a) => [a.displayName.toLowerCase(), a]));
 
       rows.forEach((row, index) => {
         const rowNumber = index + 1;
         const firmName = (row['Firm Name'] || row['firmName'] || '').toString().trim();
+        const rawFirmType = (row['Firm Type (PERMANENT/NOMINAL)'] || row['Firm Type'] || row['firmType'] || 'PERMANENT').toString().trim().toUpperCase();
         const areaName = (row['Area Name'] || row['areaName'] || '').toString().trim();
+        const subAreaName = (row['Sub-Area Name'] || row['Sub-Area'] || row['subAreaName'] || '').toString().trim();
+        const familyHeadName = (row['Family Head Name'] || row['familyHeadName'] || '').toString().trim();
         const pincode = (row['Pincode'] || row['pincode'] || '388001').toString().trim();
         const address = (row['Address'] || row['address'] || '').toString().trim();
         const errors: string[] = [];
 
         if (!firmName) errors.push('Firm Name is required.');
+        if (rawFirmType !== 'PERMANENT' && rawFirmType !== 'NOMINAL') {
+          errors.push('Firm Type must be PERMANENT or NOMINAL.');
+        }
+
+        let areaId = '';
+        let subAreaId: string | null = null;
+
         if (!areaName) {
           errors.push('Area Name is required.');
-        } else if (!areaMap.has(areaName.toLowerCase())) {
-          errors.push(`Area "${areaName}" does not exist in master records. Please add Area first.`);
+        } else {
+          const matchedArea = areaMap.get(areaName.toLowerCase());
+          if (!matchedArea) {
+            errors.push(`Area "${areaName}" does not exist in master records. Please add Area first.`);
+          } else {
+            areaId = matchedArea.id;
+            if (subAreaName) {
+              const matchedSubArea = matchedArea.subAreas?.find(
+                (sa) => sa.displayName.toLowerCase() === subAreaName.toLowerCase() || sa.nameNormalized === subAreaName.toLowerCase()
+              );
+              if (!matchedSubArea) {
+                errors.push(`Sub-Area "${subAreaName}" does not exist under Area "${areaName}".`);
+              } else {
+                subAreaId = matchedSubArea.id;
+              }
+            }
+          }
         }
+
         if (!address) errors.push('Address is required.');
 
         if (errors.length > 0) {
@@ -190,7 +224,10 @@ export class DataOpsService {
         } else {
           validRows.push({
             firmName,
-            areaId: areaMap.get(areaName.toLowerCase())!,
+            firmType: rawFirmType as MemberType,
+            familyHeadName,
+            areaId,
+            subAreaId,
             pincode,
             address,
           });
@@ -204,13 +241,13 @@ export class DataOpsService {
       ]);
 
       const surnameMap = new Map(surnames.map((s) => [s.displayName.toLowerCase(), s.id]));
-      const firmMap = new Map(firms.map((f) => [f.firmCode.toLowerCase(), f.id]));
+      const firmMap = new Map(firms.map((f) => [f.firmCode.toLowerCase(), f]));
       const existingFamilyIdSet = new Set(existingFamilies.map((f) => f.familyId.toLowerCase()));
       const seenBatchFamilyIds = new Set<string>();
 
       rows.forEach((row, index) => {
         const rowNumber = index + 1;
-        const mType = (row['Member Type'] || row['memberType'] || 'PERMANENT').toString().toUpperCase();
+        const rawMType = (row['Member Type'] || row['memberType'] || '').toString().trim().toUpperCase();
         const famId = (row['Family ID'] || row['familyId'] || '').toString().trim();
         const headName = (row['Family Head Name'] || row['familyHeadName'] || '').toString().trim();
         const surName = (row['Surname'] || row['surname'] || '').toString().trim();
@@ -226,7 +263,6 @@ export class DataOpsService {
 
         const errors: string[] = [];
 
-        if (mType !== 'PERMANENT' && mType !== 'NOMINAL') errors.push('Member Type must be PERMANENT or NOMINAL.');
         if (!famId) {
           errors.push('Family ID is required.');
         } else if (existingFamilyIdSet.has(famId.toLowerCase())) {
@@ -237,9 +273,16 @@ export class DataOpsService {
         if (!surName || !surnameMap.has(surName.toLowerCase())) {
           errors.push(`Surname "${surName}" does not exist in master records.`);
         }
-        if (!fCode || !firmMap.has(fCode.toLowerCase())) {
+
+        const linkedFirm = firmMap.get(fCode.toLowerCase());
+        if (!fCode || !linkedFirm) {
           errors.push(`Firm Code "${fCode}" does not exist in master records.`);
+        } else if (rawMType && rawMType !== linkedFirm.firmType) {
+          errors.push(`Firm "${fCode}" has classification ${linkedFirm.firmType}. Member classification must inherit from firm type.`);
         }
+
+        const effectiveMemberType = linkedFirm ? linkedFirm.firmType : (rawMType === 'NOMINAL' ? MemberType.NOMINAL : MemberType.PERMANENT);
+
         if (!hAddress) errors.push('Home Address is required.');
         if (dobStr && isNaN(Date.parse(dobStr))) errors.push('DOB must be a valid date (YYYY-MM-DD).');
         if (gender !== 'MALE' && gender !== 'FEMALE') errors.push('Gender must be MALE or FEMALE.');
@@ -250,11 +293,11 @@ export class DataOpsService {
         } else {
           seenBatchFamilyIds.add(famId.toLowerCase());
           validRows.push({
-            memberType: mType as MemberType,
+            memberType: effectiveMemberType,
             familyId: famId,
             familyHeadName: headName,
             surnameId: surnameMap.get(surName.toLowerCase())!,
-            firmId: firmMap.get(fCode.toLowerCase())!,
+            firmId: linkedFirm!.id,
             homeAddress: hAddress,
             member: {
               name: memName,
@@ -315,7 +358,10 @@ export class DataOpsService {
             data: {
               firmCode,
               firmName: row.firmName,
+              firmType: row.firmType || 'PERMANENT',
+              familyHeadName: row.familyHeadName || '',
               areaId: row.areaId,
+              subAreaId: row.subAreaId || null,
               pincode: row.pincode,
               address: row.address,
             },
@@ -401,10 +447,10 @@ export class DataOpsService {
     } else if (type === 'firms') {
       const firms = await prisma.firm.findMany({
         orderBy: { firmCode: 'asc' },
-        include: { area: true, _count: { select: { memberRecords: true } } },
+        include: { area: true, subArea: true, _count: { select: { memberRecords: true } } },
       });
-      csv = 'Firm Code,Firm Name,Area,Pincode,Address,Linked Families\n' +
-        firms.map((f) => `"${f.firmCode}","${f.firmName}","${f.area.displayName}","${f.pincode}","${f.address.replace(/"/g, '""')}",${f._count.memberRecords}`).join('\n');
+      csv = 'Firm Code,Firm Name,Firm Type,Area,Sub-Area,Family Head,Pincode,Address,Linked Families\n' +
+        firms.map((f) => `"${f.firmCode}","${f.firmName}","${f.firmType}","${f.area.displayName}","${f.subArea?.displayName || ''}","${f.familyHeadName}","${f.pincode}","${f.address.replace(/"/g, '""')}",${f._count.memberRecords}`).join('\n');
     } else if (type === 'members') {
       const members = await prisma.individualMember.findMany({
         orderBy: { familyRecord: { memberCode: 'asc' } },
@@ -429,8 +475,31 @@ export class DataOpsService {
           individualMember: { include: { familyRecord: { include: { firm: true } } } },
         },
       });
-      csv = 'Receipt Number,Receipt Type,Member Name,Member Code,Family ID,Firm,Amount,Generated At\n' +
-        receipts.map((r) => `"${r.receiptNumber}","${r.receiptType.name}","${r.individualMember.name}","${r.individualMember.familyRecord.memberCode}","${r.individualMember.familyRecord.familyId}","${r.individualMember.familyRecord.firm.firmName}",${Number(r.amount)},"${r.generatedAt.toISOString()}"`).join('\n');
+      csv = 'Receipt Number,Receipt Type,Period Type,Period,Member Name,Member Code,Family ID,Firm,Amount,Generated At\n' +
+        receipts.map((r) => {
+          const periodStr = r.periodType === 'MONTHLY' ? `${r.periodMonth}/${r.periodYear}` : `${r.periodYear}`;
+          return `"${r.receiptNumber}","${r.receiptType.name}","${r.periodType}","${periodStr}","${r.individualMember.name}","${r.individualMember.familyRecord?.memberCode || ''}","${r.individualMember.familyRecord?.familyId || ''}","${r.individualMember.familyRecord?.firm?.firmName || ''}",${Number(r.amount)},"${r.generatedAt.toISOString()}"`;
+        }).join('\n');
+    } else if (type === 'niyari') {
+      const females = await prisma.individualMember.findMany({
+        where: { gender: 'FEMALE' },
+        orderBy: { name: 'asc' },
+        include: {
+          parentalSurname: true,
+          familyRecord: {
+            include: {
+              surname: true,
+              firm: { include: { area: true } },
+            },
+          },
+        },
+      });
+      csv = 'Sl. No.,Member Name,Parental Surname,Member Code,Family ID,Age,Gender,Mobile,Firm Name,Area,Marital Status\n' +
+        females.map((m, idx) => {
+          const age = AgeCalculator.calculateAge(m.dob);
+          const parentalSurname = m.parentalSurname?.displayName || (m.maritalStatus === 'UNMARRIED' ? m.familyRecord.surname.displayName : '');
+          return `${idx + 1},"${m.name}","${parentalSurname}","${m.familyRecord.memberCode}","${m.familyRecord.familyId}",${age},"${m.gender}","${m.mobile}","${m.familyRecord.firm.firmName}","${m.familyRecord.firm.area.displayName}","${m.maritalStatus}"`;
+        }).join('\n');
     }
 
     await AuditService.log({

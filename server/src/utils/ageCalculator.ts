@@ -25,13 +25,14 @@ export class AgeCalculator {
 
   /**
    * Evaluates receipt eligibility based on age boundaries:
-   * Age 18-45 inclusive: Yuvak Mandal and Samaj
-   * Age 46+: Samaj only
+   * Age 18 up to yuvakUpperAge (inclusive): Yuvak Mandal and Samaj
+   * Above yuvakUpperAge: Samaj only
    */
   public static getEligibleReceiptTypes(
     gender: string,
     dob: Date | string,
-    referenceDate: Date = new Date()
+    referenceDate: Date = new Date(),
+    yuvakUpperAge: number = 45
   ): string[] {
     if (gender.toUpperCase() !== 'MALE') return [];
     const age = this.calculateAge(dob, referenceDate);
@@ -40,10 +41,22 @@ export class AgeCalculator {
       return [];
     }
 
-    if (age <= 45) {
+    if (age <= yuvakUpperAge) {
       return ['Yuvak Mandal', 'Samaj'];
     }
 
     return ['Samaj'];
   }
+
+  public static isEligible(
+    receiptTypeName: string,
+    gender: string,
+    dob: Date | string,
+    referenceDate: Date = new Date(),
+    yuvakUpperAge: number = 45
+  ): boolean {
+    const eligibleTypes = this.getEligibleReceiptTypes(gender, dob, referenceDate, yuvakUpperAge);
+    return eligibleTypes.includes(receiptTypeName);
+  }
 }
+

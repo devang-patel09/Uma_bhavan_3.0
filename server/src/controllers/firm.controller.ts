@@ -7,10 +7,11 @@ export class FirmController {
     try {
       const search = req.query.search as string | undefined;
       const areaId = req.query.areaId as string | undefined;
+      const firmType = req.query.firmType as 'PERMANENT' | 'NOMINAL' | undefined;
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
 
-      const result = await FirmService.getAll({ search, areaId, page, limit });
+      const result = await FirmService.getAll({ search, areaId, firmType, page, limit });
       return res.status(200).json({ data: result });
     } catch (error) {
       next(error);

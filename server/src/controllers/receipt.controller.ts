@@ -1,8 +1,52 @@
 import { Request, Response, NextFunction } from 'express';
 import { ReceiptService } from '../services/receipt.service.js';
-import { generateReceiptSchema, validateEligibilitySchema } from '../schemas/receipt.schema.js';
+import {
+  generateReceiptSchema,
+  validateEligibilitySchema,
+  batchReceiptSchema,
+  receiptConfigUpdateSchema,
+} from '../schemas/receipt.schema.js';
 
 export class ReceiptController {
+  public static async getConfig(req: Request, res: Response, next: NextFunction) {
+    try {
+      const config = await ReceiptService.getConfig();
+      return res.status(200).json({ data: config });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async updateConfig(req: Request, res: Response, next: NextFunction) {
+    try {
+      const validated = receiptConfigUpdateSchema.parse(req.body);
+      const config = await ReceiptService.updateConfig(validated, req.user?.id);
+      return res.status(200).json({ data: config });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async getBatchPreview(req: Request, res: Response, next: NextFunction) {
+    try {
+      const validated = batchReceiptSchema.parse(req.body);
+      const preview = await ReceiptService.getBatchPreview(validated);
+      return res.status(200).json({ data: preview });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async generateBatch(req: Request, res: Response, next: NextFunction) {
+    try {
+      const validated = batchReceiptSchema.parse(req.body);
+      const receipts = await ReceiptService.generateBatch(validated, req.user?.id || 'system');
+      return res.status(201).json({ data: receipts });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async getTypes(req: Request, res: Response, next: NextFunction) {
     try {
       const types = await ReceiptService.getReceiptTypes();
@@ -36,6 +80,8 @@ export class ReceiptController {
     try {
       const search = req.query.search as string | undefined;
       const receiptTypeId = req.query.receiptTypeId as string | undefined;
+      const periodType = req.query.periodType as ('MONTHLY' | 'YEARLY') | undefined;
+      const periodYear = req.query.periodYear ? parseInt(req.query.periodYear as string, 10) : undefined;
       const fromDate = req.query.fromDate as string | undefined;
       const toDate = req.query.toDate as string | undefined;
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
@@ -44,6 +90,8 @@ export class ReceiptController {
       const result = await ReceiptService.getAll({
         search,
         receiptTypeId,
+        periodType,
+        periodYear,
         fromDate,
         toDate,
         page,
@@ -86,3 +134,4 @@ export class ReceiptController {
     }
   }
 }
+

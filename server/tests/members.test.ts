@@ -51,19 +51,22 @@ describe('Member Master & Family Migration Rules', () => {
   });
 
   describe('MemberService Family & Duplicate Rules', () => {
-    it('should detect duplicate individual member in same family (Name + DOB + Gender)', async () => {
+    it('should detect duplicate individual member (Name + DOB + Gender)', async () => {
       vi.spyOn(prisma.memberRecord, 'findUnique').mockResolvedValue({
         id: 'fam_1',
         memberCode: 'M001',
-        members: [
-          {
-            id: 'mem_1',
-            name: 'Rajesh Patel',
-            dob: new Date('1990-05-15T00:00:00.000Z'),
-            gender: 'MALE',
-            mobile: '9825012345',
-          },
-        ],
+        members: [],
+      } as any);
+
+      vi.spyOn(prisma.individualMember, 'findFirst').mockResolvedValue({
+        id: 'mem_1',
+        name: 'Rajesh Patel',
+        dob: new Date('1990-05-15T00:00:00.000Z'),
+        gender: 'MALE',
+        familyRecord: {
+          memberCode: 'M001',
+          familyHeadName: 'Kiritbhai',
+        },
       } as any);
 
       await expect(
@@ -81,15 +84,7 @@ describe('Member Master & Family Migration Rules', () => {
       vi.spyOn(prisma.memberRecord, 'findUnique').mockResolvedValue({
         id: 'fam_1',
         memberCode: 'M001',
-        members: [
-          {
-            id: 'mem_1',
-            name: 'Rajesh Patel',
-            dob: new Date('1990-05-15T00:00:00.000Z'),
-            gender: 'MALE',
-            mobile: '9825012345',
-          },
-        ],
+        members: [],
       } as any);
 
       vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
@@ -121,10 +116,52 @@ describe('Member Master & Family Migration Rules', () => {
       expect(result).toBeDefined();
       expect(result.name).toBe('Rajesh Patel');
     });
+
+    it('should inherit member classification from Firm Type (Permanent firm -> Permanent member, Nominal firm -> Nominal member)', async () => {
+      vi.spyOn(prisma.memberRecord, 'findUnique').mockResolvedValue(null); // familyId unique check
+      vi.spyOn(prisma.surname, 'findUnique').mockResolvedValue({ id: 'sur_1' } as any);
+      vi.spyOn(prisma.firm, 'findUnique').mockResolvedValue({
+        id: 'firm_nom',
+        firmType: 'NOMINAL',
+        familyHeadName: 'Rameshbhai',
+      } as any);
+      vi.spyOn(prisma.memberRecord, 'findMany').mockResolvedValue([]); // Code generator
+
+      vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
+        return callback({
+          memberRecord: {
+            create: vi.fn().mockImplementation(async ({ data }: any) => {
+              return {
+                id: 'fam_new',
+                ...data,
+              };
+            }),
+          },
+          firm: {
+            update: vi.fn().mockResolvedValue({}),
+          },
+          individualMember: {
+            createMany: vi.fn().mockResolvedValue({ count: 0 }),
+          },
+        });
+      });
+
+      const res = await MemberService.createFamily({
+        familyId: 'FAM-9999',
+        familyHeadName: 'Rameshbhai Patel',
+        surnameId: 'sur_1',
+        firmId: 'firm_nom',
+        homeAddress: 'Anand',
+        members: [],
+      });
+
+      expect(res.memberType).toBe('NOMINAL');
+      expect(res.memberCode).toBe('N001');
+    });
   });
 
   describe('Transactional Member Migration / Family Splitting', () => {
-    it('should perform migration and delete original family if 0 members remain', async () => {
+    it('should perform migration to existing firm and delete original family if 0 members remain', async () => {
       const sourceFamily = {
         id: 'fam_source',
         memberCode: 'M001',
@@ -139,16 +176,46 @@ describe('Member Master & Family Migration Rules', () => {
         ],
       };
 
-      vi.spyOn(prisma.memberRecord, 'findUnique')
-        .mockResolvedValueOnce(sourceFamily as any) // source check
-        .mockResolvedValueOnce(null as any); // destination familyId uniqueness check
+      vi.spyOn(prisma.memberRecord, 'findUnique').mockImplementation(async ({ where }: any) => {
+        if (where.id === 'fam_source') return sourceFamily as any;
+        if (where.id === 'fam_dest') {
+          return {
+            id: 'fam_dest',
+            memberCode: 'M002',
+            memberType: 'PERMANENT',
+            familyId: 'FAM-1002',
+            firm: { firmName: 'New Firm' },
+            surname: { displayName: 'Patel' },
+            members: [],
+          } as any;
+        }
+        return null; // For familyId checks
+      });
 
-      vi.spyOn(prisma.firm, 'findUnique').mockResolvedValue({ id: 'firm_dest', firmCode: 'F002' } as any);
+      vi.spyOn(prisma.firm, 'findUnique').mockResolvedValue({
+        id: 'firm_dest',
+        firmCode: 'F002',
+        firmType: 'PERMANENT',
+      } as any);
       vi.spyOn(prisma.memberRecord, 'findMany').mockResolvedValue([]); // Code generator
 
       vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
         return callback({
           memberRecord: {
+            findUnique: vi.fn().mockImplementation(async ({ where }: any) => {
+              if (where.id === 'fam_dest') {
+                return {
+                  id: 'fam_dest',
+                  memberCode: 'M002',
+                  memberType: 'PERMANENT',
+                  familyId: 'FAM-1002',
+                  firm: { firmName: 'New Firm' },
+                  surname: { displayName: 'Patel' },
+                  members: [],
+                };
+              }
+              return null;
+            }),
             create: vi.fn().mockResolvedValue({
               id: 'fam_dest',
               memberCode: 'M002',
@@ -163,6 +230,13 @@ describe('Member Master & Family Migration Rules', () => {
             count: vi.fn().mockResolvedValue(0), // 0 members left in source
             findMany: vi.fn().mockResolvedValue([]),
           },
+          firm: {
+            findUnique: vi.fn().mockResolvedValue({
+              id: 'firm_dest',
+              firmCode: 'F002',
+              firmType: 'PERMANENT',
+            }),
+          },
           migrationLog: {
             create: vi.fn().mockResolvedValue({}),
           },
@@ -171,6 +245,7 @@ describe('Member Master & Family Migration Rules', () => {
       vi.spyOn(prisma.auditLog, 'create').mockResolvedValue({} as any);
 
       const result = await MemberService.migrateFamily('fam_source', {
+        migrationType: 'EXISTING_FIRM',
         destinationFirmId: 'firm_dest',
         destinationFamilyId: 'FAM-1002',
         destinationFamilyHeadName: 'Kiritbhai Patel',
@@ -179,7 +254,8 @@ describe('Member Master & Family Migration Rules', () => {
 
       expect(result.migratedCount).toBe(2);
       expect(result.sourceDeleted).toBe(true);
-      expect(result.destinationFamily.memberCode).toBe('M002');
+      expect(result.destinationFamily?.memberCode).toBe('M002');
     });
   });
 });
+

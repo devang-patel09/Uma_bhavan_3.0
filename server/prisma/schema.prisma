@@ -39,6 +39,11 @@ enum MaritalStatus {
   UNMARRIED
 }
 
+enum PeriodType {
+  MONTHLY
+  YEARLY
+}
+
 enum ReceiptStatus {
   ACTIVE
   CANCELLED
@@ -70,9 +75,25 @@ model Area {
   displayName    String
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+  subAreas       SubArea[]
   firms          Firm[]
 
   @@map("areas")
+}
+
+model SubArea {
+  id             String         @id @default(uuid())
+  areaId         String
+  area           Area           @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  nameNormalized String
+  displayName    String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  firms          Firm[]
+
+  @@unique([areaId, nameNormalized])
+  @@index([areaId])
+  @@map("sub_areas")
 }
 
 model Surname {
@@ -88,19 +109,25 @@ model Surname {
 }
 
 model Firm {
-  id            String         @id @default(uuid())
-  firmCode      String         @unique // Format: F001, F002...
-  firmName      String
-  areaId        String
-  area          Area           @relation(fields: [areaId], references: [id], onDelete: Restrict)
-  pincode       String
-  address       String         @db.Text
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  memberRecords MemberRecord[]
+  id             String         @id @default(uuid())
+  firmCode       String         @unique // Format: F001, F002...
+  firmName       String
+  firmType       MemberType     @default(PERMANENT)
+  familyHeadName String         @default("")
+  areaId         String
+  area           Area           @relation(fields: [areaId], references: [id], onDelete: Restrict)
+  subAreaId      String?
+  subArea        SubArea?       @relation(fields: [subAreaId], references: [id], onDelete: SetNull)
+  pincode        String
+  address        String         @db.Text
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  memberRecords  MemberRecord[]
 
   @@index([firmName])
   @@index([areaId])
+  @@index([subAreaId])
+  @@index([firmType])
   @@map("firms")
 }
 
@@ -119,6 +146,7 @@ model MemberRecord {
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
   members         IndividualMember[]
+  receipts        Receipt[]
 
   @@index([memberCode])
   @@index([familyId])
@@ -148,6 +176,7 @@ model IndividualMember {
   @@index([name])
   @@index([dob])
   @@index([gender])
+  @@index([name, dob, gender])
   @@index([mobile])
   @@map("individual_members")
 }
@@ -165,13 +194,30 @@ model ReceiptType {
   @@map("receipt_types")
 }
 
+model ReceiptConfig {
+  id                  String   @id @default(uuid())
+  yuvakMandalUpperAge Int      @default(45)
+  samajMonthlyAmount  Decimal  @default(100.00) @db.Decimal(10, 2)
+  samajYearlyAmount   Decimal  @default(1200.00) @db.Decimal(10, 2)
+  yuvakMonthlyAmount  Decimal  @default(50.00) @db.Decimal(10, 2)
+  yuvakYearlyAmount   Decimal  @default(500.00) @db.Decimal(10, 2)
+  updatedAt           DateTime @updatedAt
+
+  @@map("receipt_configs")
+}
+
 model Receipt {
   id                 String           @id @default(uuid())
   receiptNumber      String           @unique // Format: R000001, R000002...
   individualMemberId String
   individualMember   IndividualMember @relation(fields: [individualMemberId], references: [id], onDelete: Restrict)
+  familyRecordId     String?
+  familyRecord       MemberRecord?    @relation(fields: [familyRecordId], references: [id], onDelete: SetNull)
   receiptTypeId      String
   receiptType        ReceiptType      @relation(fields: [receiptTypeId], references: [id], onDelete: Restrict)
+  periodType         PeriodType       @default(YEARLY)
+  periodYear         Int              @default(2026)
+  periodMonth        Int?             // 1-12 if MONTHLY
   amount             Decimal          @db.Decimal(10, 2)
   generatedAt        DateTime         @default(now())
   status             ReceiptStatus    @default(ACTIVE)
@@ -183,7 +229,9 @@ model Receipt {
 
   @@index([receiptNumber])
   @@index([individualMemberId])
+  @@index([familyRecordId])
   @@index([receiptTypeId])
+  @@index([periodType, periodYear, periodMonth])
   @@index([generatedAt])
   @@index([status])
   @@map("receipts")

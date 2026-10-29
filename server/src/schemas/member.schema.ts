@@ -25,8 +25,9 @@ export const individualMemberInputSchema = z.object({
 
 export const updateIndividualMemberSchema = individualMemberInputSchema.partial();
 
+
 export const createFamilySchema = z.object({
-  memberType: z.enum(['PERMANENT', 'NOMINAL'], { required_error: 'Member Type (Permanent/Nominal) is required' }),
+  memberType: z.enum(['PERMANENT', 'NOMINAL']).optional(),
   familyId: z.string().trim().min(2, 'Unique Family ID is required'),
   familyHeadName: z.string().trim().min(2, 'Family Head Name is required'),
   surnameId: z.string().uuid('Valid Surname ID is required'),
@@ -43,10 +44,23 @@ export const updateFamilySchema = z.object({
 });
 
 export const migrateFamilySchema = z.object({
-  destinationFirmId: z.string().uuid('Destination Firm ID is required'),
-  destinationFamilyId: z.string().trim().min(2, 'Destination Family ID is required'),
-  destinationFamilyHeadName: z.string().trim().min(2, 'Destination Family Head Name is required'),
-  destinationHomeAddress: z.string().trim().min(3, 'Destination Home Address is required').optional(),
+  migrationType: z.enum(['EXISTING_FIRM', 'NEW_FIRM']).default('EXISTING_FIRM'),
+  destinationFirmId: z.string().uuid().optional(),
+  targetFamilyRecordId: z.string().uuid().optional(),
+  destinationFamilyId: z.string().trim().optional(),
+  destinationFamilyHeadName: z.string().trim().optional(),
+  destinationHomeAddress: z.string().trim().optional(),
+  newFirm: z
+    .object({
+      firmName: z.string().trim().min(2, 'Firm name must be at least 2 characters long'),
+      firmType: z.enum(['PERMANENT', 'NOMINAL']).default('PERMANENT'),
+      familyHeadName: z.string().trim().min(2, 'Family head name is required'),
+      areaId: z.string().uuid('Valid Area ID is required'),
+      subAreaId: z.string().uuid().optional().nullable(),
+      pincode: z.string().trim().min(6).default('388001'),
+      address: z.string().trim().min(3, 'Firm address is required'),
+    })
+    .optional(),
   migratingMemberIds: z.array(z.string().uuid()).min(1, 'Select at least one member to migrate'),
 });
 
@@ -55,3 +69,4 @@ export type UpdateIndividualMemberInput = z.infer<typeof updateIndividualMemberS
 export type CreateFamilyInput = z.infer<typeof createFamilySchema>;
 export type UpdateFamilyInput = z.infer<typeof updateFamilySchema>;
 export type MigrateFamilyInput = z.infer<typeof migrateFamilySchema>;
+

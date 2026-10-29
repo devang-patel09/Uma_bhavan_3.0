@@ -1,550 +1,294 @@
-# Uma Bhavan Community Management System — Product Requirements Document
+# UMA BHAVAN Community Management System — PRD
 
-## 1. Purpose
-A single-Samaj, online community management system for **Uma Bhavan, Anand, Gujarat (388001)**. The current operating model is one primary operator/Super Admin, while the architecture must support up to five users and future roles.
+**Status:** Updated with the latest clarifications.  
+**Dashboard:** Dashboard requirements are intentionally unchanged and are pending the user's next update.
 
-## 2. Scope
-Core modules:
-1. Dashboard
-2. Firm Master
-3. Member Master
-4. Area Master
-5. Surname Master
-6. Niyari Report
-7. Receipt Printing
-8. Receipt / Payment / Collection History
-9. Reports
-10. Import / Export
-11. Backup / Restore
-12. User Management
-13. Audit History
-14. Global Search
+## 1. Purpose and Scope
 
-Gohtra Master and Gohtra-related fields are excluded because they are not in the latest specification.
+A centralized system to manage firms, families, individual members, areas/sub-areas, surnames, Niyari reports, migration, and bulk receipt generation/printing.
 
-## 3. Confirmed Product Decisions
+Modules in scope:
+1. Firm Master
+2. Member Master
+3. Area and Sub-Area Master
+4. Niyari Report
+5. Receipt Management and Printing
+6. Surname Master
+7. Member Migration / Family Splitting
 
-### Organization and usage
-- One particular Samaj uses the system.
-- Online web application accessible from anywhere.
-- Current user model: Super Admin only.
-- Architecture supports future roles/users; target capacity up to five users.
-- No public registration.
-- Super Admin account is created during setup.
-- Username + password login.
-- Password recovery: email + mobile OTP when configured, plus recovery code created during initial setup.
-- Session inactivity timeout: 72 hours.
-- Five failed login attempts trigger a five-minute temporary block.
-- 2FA is not required initially.
-- Remember-me is enabled.
+Gohtra Master and Gohtra-related fields are not included in the latest requirements.
 
-### Technology
-- Frontend: React + Vite + TypeScript + Tailwind CSS.
-- Backend: Node.js + Express.js + TypeScript.
-- Database: MySQL.
-- ORM: Prisma.
-- API: REST.
-- Architecture: modular monolith.
-- Database access: backend only.
-- Validation: every API input validated at the boundary.
-- Database changes: migrations only.
-- Local / Staging / Production environments.
-- GitHub repository: public.
-- CI runs lint, typecheck, tests and build.
-- Production deployment policy: implementation should use a controlled deployment step; exact provider workflow is documented separately.
-- Hosting target: Render for backend and database, with Render Static Site as the default frontend target. Current provider constraints and free-tier limitations must be revalidated before production.
+## 2. Firm Master
 
-### Scale
-Initial planning capacity:
-- Firms: 500
-- Families: 5,000
-- Individual members: 25,000
-- Areas: 100
-- Surnames: 500
-- Receipts/year: 20,000
+### Firm list
+- Search by Firm Code or Firm Name.
+- Show firms in a list.
+- Provide Add, Details, Edit, Delete, and Print actions.
 
-## 4. Firm Master
+### Firm form
+| Field | Requirement |
+|---|---|
+| Firm Code | Required, unique primary key, immutable after creation |
+| Firm Name | Required |
+| Firm Type | Required: Permanent or Nominal |
+| Family Head Name | Required/selected family head linked to the related family record |
+| Main Area | Selected from Area Master |
+| Sub-Area | Selected from sub-areas belonging to the selected Main Area |
+| Pincode | Firm pincode |
+| Firm Address | Firm address |
 
-Fields:
-- Firm Code
-- Firm Name
-- Area
-- Pincode
-- Firm Address
+### Firm behavior
+- Firm Details shows saved details in a readable table.
+- Edit opens a pre-filled form; Firm Code cannot change.
+- Delete removes the firm subject to relationship constraints.
+- Print produces a clean print-ready version of the selected firm's latest details.
+- Family Head Name must be linked consistently between Firm Master and Member Master.
 
-Firm Code:
-- Automatically generated.
-- Format: F001, F002, ...
-- Codes are not editable.
-- Deleted codes may be reused.
+### Permanent/Nominal inheritance
+- Firm Type is the source of truth for member classification.
+- Members linked to a Permanent firm are automatically Permanent.
+- Members linked to a Nominal firm are automatically Nominal.
+- Users cannot independently assign a conflicting member classification.
+- Changing the linked firm or migrating a member updates the member classification from the destination firm's type.
+- If Firm Type changes, linked member classifications must remain consistent.
 
-Functions:
-- Search by Firm Code / Firm Name.
-- Add.
-- View.
-- Edit.
-- Delete.
-- Print.
-
-Deletion:
-- A firm cannot be deleted while associated family/member records exist.
-- The system displays a clear blocking message.
-
-## 5. Member Master
-
-A Member record represents one family list and is either **Permanent** or **Nominal**.
-
-### Member code
-- Permanent: M001, M002, ...
-- Nominal: N001, N002, ...
-- Automatically generated.
-- Category-specific sequences.
-- Codes are not editable.
-- Deleted codes may be reused.
-- A family cannot contain mixed Permanent and Nominal members.
+## 3. Member Master
 
 ### Family-level fields
-- Member Code
-- Family Head Name
-- Surname
-- Family ID
-- Home Address
-- 18+ Male Count
-
-Family ID:
-- Manually entered.
-- Required.
-- Unique.
-- Not editable.
-- No relationship to Member Code.
-
-### Individual fields
-- Member Name
-- Date of Birth
-- Age (calculated only)
-- Gender: Male / Female
-- Mobile Number: mandatory; duplicate mobile numbers are allowed within families because children may share a parent's number.
-- Blood Group: A+, A-, B+, B-, AB+, AB-, O+, O-, Unknown
-- Marital Status: Married / Unmarried
-- Parental Surname
-- Member type is inherited from the family-level Member Type and is not independently selected for each person.
-
-### Family head
-The family head can also be an individual member.
-
-### Entry modes
-Both are supported:
-- Create family first, then add members.
-- Create family and members in one workflow.
-
-No fixed maximum number of individual members per family.
-
-### Age
-- Age is always calculated from Date of Birth.
-- Age is not manually editable.
-- Age calculation updates automatically as time passes.
-
-### 18+ male count
-- Age boundary: >= 18.
-- Male + age >= 18 contributes to the count.
-- Count is stored for performance.
-- Count is recalculated automatically when required after create/edit/delete/migration and on relevant reads.
-
-### Duplicate individual
-Duplicate detection is within the same family only.
-Key:
-- Member Name
-- Date of Birth
-- Gender
-
-If a duplicate is detected:
-- Ask the operator for confirmation before proceeding.
-
-## 6. Member Migration / Family Splitting
-
-Migration starts from an existing Member Code.
-
-Flow:
-1. Open existing Member record.
-2. Click Migrate.
-3. Select or create the destination Firm.
-4. Display all members in the source family.
-5. Operator selects specific members to migrate.
-6. Destination Member Code is generated automatically.
-7. Permanent source family members can migrate only into a Permanent destination.
-8. Nominal source family members can migrate only into a Nominal destination.
-9. Mixed member types are not allowed in one Member Code.
-10. Remaining members stay in the original Member Code.
-11. If no members remain, the original Member record is deleted.
-12. Migration should be transactional: either all selected changes succeed or none do.
-
-Migration history is retained, but the client has not requested a dedicated migration-history UI/field set. Audit history still records the migration action.
-
-**Open implementation detail:** exact Family ID behavior during migration remains to be confirmed.
-
-## 7. Area Master
-- Add Area.
-- Enter key submits.
-- Case-insensitive duplicate checking.
-- Duplicate message: "Area already inserted."
-- Delete.
-- List columns: Sl. No., Area Name, Action.
-
-## 8. Surname Master
-- Add Surname.
-- Enter key submits.
-- Case-insensitive duplicate checking.
-- Duplicate message: "Surname already inserted."
-- Delete.
-- Print.
-- List columns: Sl. No., Surname, Action.
-
-Surname selection/creation is integrated into Member Master.
-
-## 9. Niyari Report
-
-Purpose: identify female members by surname.
-
-Filters:
-- Surname
-- Area
-- Firm
-- Age
-- Marital Status
-- Member Type
-- Gender
-
-Rules:
-- Married female: use Parental Surname for Niyari classification.
-- Unmarried female: use Parental Surname.
-- Both married and unmarried females appear.
-- Current report columns:
-  - Sl. No.
-  - Name
-  - Surname
-  - Member Code
-  - Family ID
-  - Mobile
-  - Firm
-  - Marital Status
-
-Functions:
-- Filter.
-- Search.
-- Print.
-- PDF.
-- Excel.
-
-## 10. Receipt Printing
-
-### Eligibility
-- Eligible members are male members aged >= 18.
-- Age 18–45 inclusive: Yuvak Mandal and Samaj.
-- Age 46+: Samaj only.
-
-### Receipt types
-Current types:
-- Yuvak Mandal
-- Samaj
-
-Architecture supports additional types later.
-
-### Amount
-- Each receipt type has a default amount.
-- Operator can edit the amount before generation.
-
-### Receipt number
-- Automatically generated.
-- Format: R000001, R000002, ...
-- The current requirement says receipt numbers are reused after deletion if the deleted number becomes available.
-
-### Receipt date/time
-- Automatically recorded when generated.
-
-### Duplicate receipt rule
-Prevent duplicate when:
-- Same member
-- Same receipt type
-- Same date
-
-### Receipt history
-Stores:
-- Receipt Number
-- Member Code
-- Member Name
-- Family ID
-- Firm
-- Receipt Type
-- Amount
-- Date/Time
-- Status
-- Generated By
-
-Functions:
-- Search/filter.
-- View.
-- Reprint.
-- Edit.
-- Delete after confirmation.
-- Deleted receipt disappears from Receipt History.
-- Audit history retains the delete action.
-
-### Receipt print
-A4 output is the currently confirmed paper size.
-Required content:
-- Samaj logo
-- Samaj name
-- Address
-- Phone number
-- Receipt number
-- Date
-- Member code
-- Member name
-- Family ID
-- Firm name
-- Receipt type
-- Amount
-- Amount in words
-- Signature
-- Stamp
-- QR code
-
-QR code:
-- Encodes receipt information directly.
-- Online receipt verification is required.
-
-Exact visual receipt dimensions/layout remain a design artifact to be finalized after logo is supplied.
-
-## 11. Dashboard
-
-Cards:
-- Total Firms
-- Total Families
-- Total Members
-- Permanent Members
-- Nominal Members
-- Male Members
-- Female Members
-- 18+ Male Members
-- Total Collection
-
-Sections:
-- Recent Receipts
-- Recent Members
-- Recent Activities
-
-Charts:
-- Members by Area
-- Members by Gender
-- Permanent vs Nominal
-- Collection by Month
-
-## 12. Global Search
-Search across:
-- Member Code
-- Member Name
-- Family ID
-- Family Head
-- Surname
-- Mobile
-- Firm Code
-- Firm Name
-- Area
-- Receipt Number
-
-## 13. Excel Import / Export
-
-Exports:
-- Firms
-- Members
-- Areas
-- Surnames
-- Niyari
-- Receipts
-- Payments/Collections
-- Reports
-
-Export formats:
-- Excel
-- CSV where appropriate
-- PDF
-- Print for reports
-
-Imports:
-- Firms
-- Members
-- Areas
-- Surnames
-- All applicable master data
-
-Import flow:
-1. Upload template.
-2. Validate.
-3. Preview.
-4. Show errors/warnings.
-5. Require explicit confirmation.
-6. Import transactionally where possible.
-7. Produce success/error summary.
-8. Provide downloadable error Excel.
-
-Duplicate import records:
-- Ask operator.
-
-Templates are provided for each importable master dataset.
-
-## 14. Backup / Restore
-- Manual backup.
-- Backup downloads to operator's computer.
-- Backup format: encrypted application backup package containing database dump and metadata.
-- Restore is Super Admin only.
-- Before restore, automatically create a safety backup.
-- Restore requires explicit confirmation.
-- Backup is validated before restore.
-- Restore process verifies compatibility/version metadata.
-- Full data export is available to Super Admin.
-
-## 15. Reports
-Required report families:
-- Member Report
-- Firm Report
-- Area-wise Member Report
-- Gender Report
-- Age-wise Report
-- Permanent/Nominal Report
-- 18+ Male Report
-- Niyari Report
-- Receipt Report
-- Collection Report
-- Migration Report
-- Audit Report
-
-Reports support:
-- Excel
-- PDF
-- Print
-
-## 16. Authentication and Authorization
-Current role:
-- Super Admin
-
-Future role architecture supported, but only Super Admin is implemented initially.
-
-Super Admin can access all current modules and operations.
-
-Permissions must be enforced on the server.
-
-## 17. Audit History
-Log:
-- Login
-- Logout
-- Add
-- Edit
-- Delete
-- Migration
-- Receipt generation
-- Receipt deletion
-- Excel import
-- Excel export
-- Backup
-- Restore
-- User creation
-- User modification
-
-Audit entry should record:
-- Date/time
-- User
-- Module
-- Action
-- Record reference where applicable
-
-Do not store old/new field values.
-Do not store IP address.
-Do not store device information.
-Sensitive personal information must not be unnecessarily placed in logs.
-
-Super Admin can delete audit records. Retention period is configurable.
-
-## 18. Security
-- HTTPS required in production.
-- Standard security headers.
-- Backend-only database access.
-- ORM/parameterized queries.
-- Server-side validation.
-- Server-side authorization.
-- Bulk/destructive actions require confirmation.
-- Personal data is treated as sensitive.
-- Secrets only in environment variables.
-- Error responses to users are friendly; technical details stay in logs/error tracking.
-
-## 19. Error tracking / monitoring
-- Sentry is the preferred error-tracking service.
-- Structured logs.
-- Request IDs.
-- /api/health endpoint.
-- Monitor uptime, API health, database connectivity, error rate and response time.
-- Email alerts if an email channel is configured; otherwise no alert delivery.
-
-## 20. Testing
-Required:
-- Unit tests for critical business rules.
-- Integration tests for API endpoints.
-- Browser E2E tests for critical workflows.
-- No fixed percentage target; all critical business logic must be covered.
-- Test loading, empty, error and success states.
-- Test security and authorization boundaries.
-
-## 21. UI/UX
-Brand palette:
-- #FFE584
-- #FF9E4F
-- #E97451
-- #5B3228
-
-Style:
-- Professional enterprise dashboard.
-- Desktop-first.
-- Responsive for desktop, tablet and mobile.
-- Light/dark mode.
-- Top navigation.
-- Dashboard is the post-login landing page.
-- Samaj logo will be supplied before final print design.
-
-Samaj:
-- Uma Bhavan
-- Anand, Gujarat
-- 388001
-
-## 22. Hosting decision and constraint
-Target architecture:
-- Frontend: Render Static Site.
-- Backend: Render Web Service.
-- MySQL: Render-hosted private MySQL service using persistent storage.
-- Redis-compatible shared store may be added for rate limiting if required.
-- Sentry for error tracking.
-
-**Important cost constraint:** the client target is ₹0/month. Current Render documentation confirms free web/static hosting but its free datastore offering is Postgres rather than a free MySQL service; Render's MySQL deployment is a separately deployed service backed by persistent storage. Therefore a fully production-grade Render + MySQL setup cannot be assumed to fit ₹0/month. This is an explicit deployment decision to revalidate before production. The application architecture remains MySQL-based as requested.
-
-## 23. Environments
-- Local
-- Staging
-- Production
-
-Separate environment variables and databases are required.
-
-## 24. Out of scope for initial release
-- Public registration.
-- 2FA.
-- Mixed Permanent/Nominal families.
-- Multi-Samaj tenancy.
-- Gohtra Master.
-- Automatic scheduled backups.
-- Dedicated email workflow until an email provider/account is configured.
-- Dedicated migration-history UI beyond audit logging unless later requested.
-
-## 25. Open Decisions
-1. Exact Family ID behavior during migration.
-2. Exact receipt visual dimensions/layout after logo is supplied.
-3. Email provider/account.
-4. Final production hosting budget because ₹0 conflicts with production MySQL hosting on the selected provider.
-5. Exact configurable audit retention period.
-6. Exact QR verification page styling.
+| Field | Requirement |
+|---|---|
+| Member Code | Required, unique primary key, immutable |
+| Family Head Name | Linked to the family head maintained for the associated firm/family |
+| Surname | Family surname |
+| Family ID | Required, unique, immutable |
+| Home Address | Family address |
+| Firm | Linked firm |
+| Member Classification | Inherited from the firm's Permanent/Nominal type |
+| Count (18+ Male) | Derived from male individual members aged 18 and above |
+
+### Individual member fields
+| Field | Requirement |
+|---|---|
+| Member Name | Individual name |
+| Date of Birth | Used to calculate age |
+| Age | Automatically calculated |
+| Gender | Individual's gender |
+| Mobile Number | Individual's mobile number |
+| Blood Group | Dropdown; must display and persist correctly in Add, Edit, Details, and retrieval |
+| Marital Status | Married / Unmarried |
+| Parental Surname | Parental surname, especially important for married females |
+
+### Rules
+- Age is calculated from Date of Birth.
+- Age 18 and above counts toward 18+ Male Count if the member is male.
+- Recalculate the count after edits, deletions, and migration to avoid stale totals.
+- Prevent duplicates when Member Name + Date of Birth + Gender exactly match an existing individual.
+- Member Details supports Edit, Delete, Print, and (where applicable) Migrate.
+- Print generates a clean print-ready version of the selected family/member record.
+
+## 4. Area and Sub-Area Master
+
+- Support a hierarchy: one Main Area can contain multiple Sub-Areas.
+- Example: Main Area Anand may contain sub-areas such as Jitodia and Karamsad Road.
+- Users can create and manage main areas and create sub-areas under a selected main area.
+- Each sub-area must reference its parent main area.
+- Duplicate checks are case-insensitive within the relevant level (for example, Anand/anand/ANAND are the same main area).
+- When adding/editing a firm, select Main Area first, then select a Sub-Area belonging to that Main Area.
+- A firm is linked to both its Main Area and Sub-Area.
+
+## 5. Member Migration / Family Splitting
+
+### Destination options
+When the user selects **Migrate**, offer:
+1. **Migrate to Existing Firm**
+2. **Create New Firm**
+
+### Existing firm
+- Show available firms and allow destination selection.
+- Allow selection of individual members from the source Member ID/family.
+- Move selected members to the destination family/member record.
+- Remove migrated members from the source record so they are not active in both families.
+- Update Permanent/Nominal classification from the destination firm's type.
+- Recalculate source and destination 18+ Male Counts.
+
+### Create new firm
+- Open the complete Firm Master form with Firm Code, Firm Name, Firm Type, Family Head Name, Main Area, Sub-Area, Pincode, and Firm Address.
+- The new family head must be selected from the members selected for migration.
+- Create the new firm and corresponding new Member ID/family arrangement.
+- Move selected members to the new record and remove them from the source.
+- Inherit member classification from the new firm's type.
+- Recalculate source and destination 18+ Male Counts.
+
+### Migration integrity
+- Before confirmation, show the source family, selected members, and destination.
+- Migration must be atomic/consistent: failures must not leave records partly moved.
+- Keep family, firm, classification, and count relationships consistent.
+- Respect Member Code and Family ID uniqueness. The exact generation policy for new IDs must follow the project's agreed identifier rules.
+
+## 6. Surname Master
+
+- Maintain surname records.
+- Add, list, and delete surnames, subject to relationship constraints.
+- Duplicate detection is case-insensitive: Diwani/diwani/DIWANI are the same surname.
+- Surname handling must be integrated with Member Master; the precise inline create/select UI should follow the agreed design.
+- Provide **Print** to print the current surname list in a clean layout.
+
+## 7. Niyari Report
+
+- Provide a surname selector and show relevant female members.
+- For married females, always use **Parental Surname**, regardless of the current/married surname.
+- Example: current surname Sankhala + Parental Surname Diwani means the member appears under Diwani.
+- Columns: Sl. No., Name, Surname.
+- Provide **Print** for the currently selected/filtered results.
+
+## 8. Receipt Management and Printing
+
+### Workflow
+1. Select receipt type: Samaj or Yuvak Mandal.
+2. Select collection period: Monthly or Yearly.
+3. Select the applicable month/year or year.
+4. System finds eligible male members automatically.
+5. System applies configured amount and period eligibility rules.
+6. Show a batch preview before generation/printing.
+7. Confirm the batch and generate/save receipts.
+8. Open a print-ready batch.
+
+Users must not have to select each member individually for bulk receipt generation.
+
+### Samaj eligibility
+- Include all eligible male members aged **18 and above** who belong to the applicable Samaj population.
+- Selecting Samaj generates receipts for all eligible members in one batch.
+
+### Yuvak Mandal eligibility
+- Include male members aged **18 and above**, up to and including the administrator-configured upper age limit.
+- The upper limit is not hard-coded.
+- Admin can set an exact upper age, such as 45, 47, or 50.
+- Changes to the upper limit apply to future eligibility and batch generation.
+- Selecting Yuvak Mandal generates receipts for all eligible members in one batch.
+
+### Configured receipt amounts
+Admin configures amounts for each combination:
+- Receipt Type: Samaj / Yuvak Mandal
+- Period: Monthly / Yearly
+
+The batch uses the configured amount for the selected type and period. The user should not have to enter an amount per member during normal batch generation.
+
+### Period duplicate prevention
+**Monthly**
+- At most one receipt per member, receipt type, and calendar month.
+- The day within the month does not matter.
+- Example: if a receipt is generated on 10 October 2026, another receipt for the same member/type/October 2026 is blocked.
+- A new receipt can be generated when the calendar month changes, subject to other rules.
+
+**Yearly**
+- At most one receipt per member, receipt type, and calendar year.
+- A second receipt for the same member/type is blocked for the remainder of that calendar year.
+- Under this interpretation, a receipt issued on 10 October 2026 blocks another receipt for that member/type until 1 January 2027. The example of 10 September 2027 is therefore allowed.
+- This uses a **calendar-year rule**, not a rolling 12-month waiting period.
+
+### Batch preview and history
+- Preview shows the members/receipts to be generated before printing.
+- Where practical, show excluded members and the reason, such as already receipted for the selected period or age ineligibility.
+- Persist each receipt with at least: family/member record, individual member, receipt type, period type, applicable month/year or year, amount, and generation date/time.
+- Historical receipts must not silently change when age limits or configured amounts are updated.
+
+### A4 printing
+- Print batch receipts on A4 paper, with multiple receipts per page where legible.
+- Each receipt must be clearly separated for handling/cutting.
+- Do not split an individual receipt across pages.
+- Hide application navigation and unrelated controls from print output.
+- Show batch preview before opening the standard system/browser print dialog.
+
+## 9. Print Requirements
+
+| Module/Page | Print output |
+|---|---|
+| Firm Details | Selected firm's details |
+| Member Details | Selected family/member details |
+| Surname Master | Current surname list |
+| Niyari Report | Current filtered report |
+| Receipt Management | Previewed batch of generated receipts |
+
+All print output must be readable, reflect current/saved data, and omit unnecessary application controls.
+
+## 10. Key Business Rules
+
+1. Firm Code is required, unique, and immutable.
+2. Member Code is required, unique, and immutable.
+3. Family ID is required, unique, and immutable.
+4. Firm Type is Permanent or Nominal.
+5. Members inherit classification from their linked firm's type.
+6. Firm Master and Member Master maintain a consistent family-head relationship.
+7. A Main Area can contain multiple Sub-Areas.
+8. A firm is linked to a Main Area and Sub-Area.
+9. Age is calculated from Date of Birth.
+10. Male members aged 18 and above count toward 18+ Male Count.
+11. Duplicate individual members are prevented when Name + DOB + Gender exactly match.
+12. Married females always appear under Parental Surname in Niyari Report.
+13. Migration supports an existing firm or creation of a new firm.
+14. Migrated members are moved out of the source family record.
+15. Migration updates classification and recalculates counts.
+16. Samaj includes male members aged 18 and above.
+17. Yuvak Mandal includes male members aged 18 and above through the configured upper limit.
+18. Amounts are configured by receipt type and monthly/yearly period.
+19. Monthly receipts are limited to one per member/type/calendar month.
+20. Yearly receipts are limited to one per member/type/calendar year.
+21. Batch generation must show a preview before printing.
+22. Receipts print on A4 with multiple receipts per page where legible.
+23. Dashboard requirements remain unchanged pending separate instructions.
+
+## 11. Acceptance Criteria
+
+### Firm/member classification
+- Firm form requires Permanent/Nominal.
+- Member classification is inherited from the linked firm.
+- Changing the linked firm or migrating a member updates classification.
+- Family Head Name remains linked consistently between firm and member records.
+
+### Area hierarchy
+- Main Areas and Sub-Areas can be maintained.
+- Each Sub-Area belongs to a Main Area.
+- Firm form filters Sub-Areas based on selected Main Area.
+
+### Migration
+- Migration offers Existing Firm and Create New Firm.
+- Existing Firm flow lets the user select a destination.
+- New Firm flow uses the full Firm Master form.
+- New family head is selected from migrated members.
+- Migrated members are removed from the source record and assigned to the destination.
+- Counts and inherited classifications are correct after migration.
+
+### Member and Niyari behavior
+- Blood Group displays and persists across Add, Edit, Details, and retrieval.
+- Married females are always listed under Parental Surname.
+- Niyari Print prints the current result set.
+
+### Receipts
+- User can select Samaj/Yuvak Mandal and Monthly/Yearly.
+- Eligible members are selected automatically for bulk generation.
+- Samaj uses the age 18+ rule.
+- Yuvak Mandal uses age 18+ through the configured upper age limit.
+- Amount is selected from admin configuration for type and period.
+- Duplicate receipts for the same member/type/period are blocked.
+- Batch preview appears before printing.
+- A4 print layout fits multiple receipts per page without splitting a receipt.
+- Receipt history supports period validation.
+
+### Scope control
+- Do not change dashboard features until separate instructions arrive.
+
+## 12. Items Requiring Confirmation
+
+1. Whether codes/IDs are entered manually or generated automatically, unless defined elsewhere in the project.
+2. Exact delete behavior when firms, areas, sub-areas, or surnames are already referenced by other records.
+3. Whether printed receipts require logo, signature, receipt number, or additional branding fields.
+4. How to define an “active” member/firm if active-status fields exist in the application.
+5. Dashboard changes will be provided separately.
+
+## 13. Dashboard Scope
+
+Do not redesign, remove, or add dashboard metrics, cards, charts, or navigation based on this update. Wait for the user's next dashboard-specific requirements.
+
+## 14. Implementation Agent Summary
+
+Implement these requirements without removing existing in-scope functionality. Maintain consistent relationships among Firm Master, Member Master, family heads, main areas/sub-areas, and inherited Permanent/Nominal classification. Implement migration as a safe move from the source family to the destination. Implement bulk Samaj and Yuvak Mandal receipts with admin-configured amounts, configurable Yuvak Mandal upper age, monthly/yearly duplicate-period restrictions, a batch preview, and A4 multi-receipt printing. Fix Blood Group display/persistence and ensure married females are reported using Parental Surname. Leave dashboard behavior unchanged until new instructions are provided.

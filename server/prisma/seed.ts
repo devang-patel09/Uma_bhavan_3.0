@@ -69,6 +69,43 @@ async function main() {
   }
   console.log('✅ Initial surnames seeded');
 
+  // 5. Seed Default Receipt Config
+  const existingConfig = await prisma.receiptConfig.findFirst();
+  if (!existingConfig) {
+    await prisma.receiptConfig.create({
+      data: {
+        yuvakMandalUpperAge: 45,
+        samajMonthlyAmount: 100.0,
+        samajYearlyAmount: 1200.0,
+        yuvakMonthlyAmount: 50.0,
+        yuvakYearlyAmount: 500.0,
+      },
+    });
+    console.log('✅ Default receipt configuration seeded');
+  }
+
+  // 6. Seed Sub-Areas for Anand / Station Road
+  const stationRoad = await prisma.area.findFirst({ where: { displayName: 'Station Road' } });
+  if (stationRoad) {
+    const subAreas = ['Jitodia Road', 'Karamsad Road', 'Near Railway Station'];
+    for (const sub of subAreas) {
+      const norm = sub.trim().toLowerCase();
+      const existingSub = await prisma.subArea.findFirst({
+        where: { areaId: stationRoad.id, nameNormalized: norm },
+      });
+      if (!existingSub) {
+        await prisma.subArea.create({
+          data: {
+            areaId: stationRoad.id,
+            displayName: sub,
+            nameNormalized: norm,
+          },
+        });
+      }
+    }
+    console.log('✅ Initial sub-areas seeded');
+  }
+
   console.log('🎉 Seeding complete.');
 }
 

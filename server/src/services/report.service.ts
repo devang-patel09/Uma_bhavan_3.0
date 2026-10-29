@@ -31,9 +31,10 @@ export class ReportService {
     }
 
     if (surnameId) {
+      // Per PRD Section 7: For married females, always use Parental Surname, regardless of current/married surname.
       where.OR = [
         { parentalSurnameId: surnameId },
-        { familyRecord: { surnameId } },
+        { maritalStatus: 'UNMARRIED', familyRecord: { surnameId } },
       ];
     }
 
@@ -93,15 +94,19 @@ export class ReportService {
       }),
     ]);
 
-    // Calculate age and filter by age boundary if specified
+    // Calculate age and assign effective surname (Parental Surname for married females)
     const mapped = rawMembers.map((m, index) => {
       const calculatedAge = AgeCalculator.calculateAge(m.dob);
-      const effectiveSurname = m.parentalSurname?.displayName || m.familyRecord.surname.displayName;
+      const effectiveSurname =
+        m.maritalStatus === 'MARRIED'
+          ? (m.parentalSurname?.displayName || 'Unknown')
+          : (m.parentalSurname?.displayName || m.familyRecord.surname.displayName);
 
       return {
         sl: skip + index + 1,
         id: m.id,
         name: m.name,
+        surname: effectiveSurname,
         dob: m.dob.toISOString().split('T')[0],
         age: calculatedAge,
         parentalSurname: effectiveSurname,

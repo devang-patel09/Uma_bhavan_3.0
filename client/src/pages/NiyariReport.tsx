@@ -128,10 +128,36 @@ export const NiyariReport: React.FC = () => {
     fetchNiyari();
   }, [selectedSurnameId, selectedAreaId, selectedFirmId, maritalStatus, memberType, minAge, maxAge, searchTerm]);
 
+  const handleExportCsv = () => {
+    if (members.length === 0) return;
+    const headers = ['Sl. No.', 'Member Name', 'Parental Surname', 'Member Code', 'Family ID', 'Age', 'Mobile', 'Firm Name', 'Area', 'Status'];
+    const rows = members.map((m) => [
+      m.sl,
+      `"${(m.name || '').replace(/"/g, '""')}"`,
+      `"${(m.parentalSurname || '').replace(/"/g, '""')}"`,
+      `"${m.memberCode}"`,
+      `"${m.familyId}"`,
+      m.age,
+      `"${m.mobile}"`,
+      `"${(m.firmName || '').replace(/"/g, '""')}"`,
+      `"${(m.areaName || '').replace(/"/g, '""')}"`,
+      `"${m.maritalStatus}"`,
+    ]);
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Uma_Bhavan_Niyari_Report_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center no-print">
         <div>
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="h-6 w-6 text-brand-terracotta" />
@@ -141,20 +167,27 @@ export const NiyariReport: React.FC = () => {
             Identify female members categorized by parental surname for Samaj records and matrimonial indexing
           </p>
         </div>
-        <div className="flex items-center gap-2 print:hidden">
+        <div className="flex items-center gap-2">
           <button onClick={() => window.print()} className="btn-secondary">
             <Printer className="h-4 w-4" />
             <span>Print Report</span>
           </button>
-          <button onClick={() => alert('Exporting Niyari dataset to Excel...')} className="btn-primary">
+          <button onClick={handleExportCsv} className="btn-primary">
             <Download className="h-4 w-4" />
             <span>Export Excel</span>
           </button>
         </div>
       </div>
 
+      {/* Print-only report header */}
+      <div className="print-only">
+        <p className="text-xs text-gray-400">Uma Bhavan Community Management System</p>
+        <h2 className="text-xl font-bold text-black">Niyari Female Report</h2>
+        <p className="text-xs text-gray-500">Printed on {new Date().toLocaleDateString('en-IN')} · Total: {members.length} records</p>
+      </div>
+
       {/* Filter Ribbon (hidden in print) */}
-      <div className="card-premium space-y-3 print:hidden">
+      <div className="card-premium space-y-3 no-print">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">Parental Surname</label>

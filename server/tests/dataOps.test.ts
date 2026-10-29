@@ -73,7 +73,10 @@ describe('Data Operations, Templates, Import Validation & Exports', () => {
         {
           firmCode: 'F001',
           firmName: 'Shree Umiya Krushi Kendra',
+          firmType: 'PERMANENT',
+          familyHeadName: 'Patel Kiritbhai',
           area: { displayName: 'Station Road' },
+          subArea: { displayName: 'Station West' },
           pincode: '388001',
           address: 'APMC Market',
           _count: { memberRecords: 2 },
@@ -82,8 +85,35 @@ describe('Data Operations, Templates, Import Validation & Exports', () => {
       vi.spyOn(prisma.auditLog, 'create').mockResolvedValue({} as any);
 
       const result = await DataOpsService.exportData('firms', 'usr_admin');
-      expect(result.csv).toContain('Firm Code,Firm Name,Area,Pincode,Address,Linked Families');
-      expect(result.csv).toContain('"F001","Shree Umiya Krushi Kendra","Station Road"');
+      expect(result.csv).toContain('Firm Code,Firm Name,Firm Type,Area,Sub-Area,Family Head,Pincode,Address,Linked Families');
+      expect(result.csv).toContain('"F001","Shree Umiya Krushi Kendra","PERMANENT","Station Road","Station West","Patel Kiritbhai"');
+    });
+
+    it('should generate formatted CSV export for niyari female demographics', async () => {
+      vi.spyOn(prisma.individualMember, 'findMany').mockResolvedValue([
+        {
+          name: 'Patel Gitaben',
+          dob: new Date('1985-05-15'),
+          gender: 'FEMALE',
+          mobile: '9825012345',
+          maritalStatus: 'MARRIED',
+          parentalSurname: { displayName: 'Amin' },
+          familyRecord: {
+            memberCode: 'M001',
+            familyId: 'FAM-1001',
+            surname: { displayName: 'Patel' },
+            firm: {
+              firmName: 'Shree Umiya Krushi Kendra',
+              area: { displayName: 'Station Road' },
+            },
+          },
+        },
+      ] as any);
+      vi.spyOn(prisma.auditLog, 'create').mockResolvedValue({} as any);
+
+      const result = await DataOpsService.exportData('niyari', 'usr_admin');
+      expect(result.csv).toContain('Sl. No.,Member Name,Parental Surname,Member Code,Family ID,Age,Gender,Mobile,Firm Name,Area,Marital Status');
+      expect(result.csv).toContain('1,"Patel Gitaben","Amin","M001","FAM-1001"');
     });
   });
 });

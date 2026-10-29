@@ -1,0 +1,68 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  server-ci:
+    name: Server Checks & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Lint
+        working-directory: server
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: server
+        run: npm run typecheck
+
+      - name: Run Tests
+        working-directory: server
+        run: npm test
+
+  client-ci:
+    name: Client Checks & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Lint
+        working-directory: client
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: client
+        run: npm run typecheck
+
+      - name: Run Tests
+        working-directory: client
+        run: npm test
+
+      - name: Production Build
+        working-directory: client
+        run: npm run build
