@@ -19,6 +19,7 @@ import {
   CalendarDays,
 } from 'lucide-react';
 import { api } from '../services/api.js';
+import { useEscapeKey } from '../hooks/useHotkeys.js';
 
 interface ReceiptType {
   id: string;
@@ -114,6 +115,12 @@ export const Receipts: React.FC = () => {
   const [batchPrintReceipts, setBatchPrintReceipts] = useState<ReceiptItem[]>([]);
   const [showBatchPrint, setShowBatchPrint] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Esc closes the open popup (top-most first)
+  useEscapeKey(() => setShowIssueModal(false), showIssueModal);
+  useEscapeKey(() => setShowSettingsModal(false), showSettingsModal);
+  useEscapeKey(() => setShowBatchModal(false), showBatchModal);
+  useEscapeKey(() => setVoucherModalReceipt(null), voucherModalReceipt !== null);
 
   // Issue Receipt form
   const [memberSearch, setMemberSearch] = useState('');

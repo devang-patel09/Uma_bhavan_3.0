@@ -1,4 +1,4 @@
-import { MemberType, Gender, BloodGroup, MaritalStatus } from '@prisma/client';
+import { MemberType, Gender, BloodGroup, MaritalStatus, Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuditService } from './audit.service.js';
@@ -11,6 +11,63 @@ import {
   UpdateIndividualMemberInput,
   MigrateFamilyInput,
 } from '../schemas/member.schema.js';
+
+const FAMILY_INCLUDE = {
+  surname: { select: { id: true, displayName: true } },
+  firm: { select: { id: true, firmCode: true, firmName: true, firmType: true } },
+  members: {
+    include: {
+      parentalSurname: { select: { id: true, displayName: true } },
+    },
+    orderBy: { dob: 'asc' },
+  },
+  _count: {
+    select: { members: true },
+  },
+} satisfies Prisma.MemberRecordInclude;
+
+type FamilyWithRelations = Prisma.MemberRecordGetPayload<{ include: typeof FAMILY_INCLUDE }>;
+
+/** Parental (maiden) surname only applies to married women. */
+export function allowsParentalSurname(gender?: string, maritalStatus?: string): boolean {
+  return gender === 'FEMALE' && maritalStatus === 'MARRIED';
+}
+
+/** Flattens a family record (with relations) into the API response shape. */
+function toFamilyDto(r: FamilyWithRelations) {
+  return {
+    id: r.id,
+    memberCode: r.memberCode,
+    memberType: r.memberType,
+    familyId: r.familyId,
+    familyHeadName: r.familyHeadName,
+    surnameId: r.surnameId,
+    surname: r.surname.displayName,
+    firmId: r.firmId,
+    firmCode: r.firm.firmCode,
+    firmName: r.firm.firmName,
+    firmType: r.firm.firmType,
+    homeAddress: r.homeAddress,
+    male18PlusCount: r.male18PlusCount,
+    totalMembers: r._count.members,
+    members: r.members.map((m) => ({
+      id: m.id,
+      name: m.name,
+      dob: m.dob,
+      age: AgeCalculator.calculateAge(m.dob),
+      gender: m.gender,
+      mobile: m.mobile,
+      bloodGroup: m.bloodGroup,
+      maritalStatus: m.maritalStatus,
+      parentalSurnameId: m.parentalSurnameId,
+      parentalSurname: m.parentalSurname?.displayName,
+      is18PlusMale: AgeCalculator.is18PlusMale(m.gender, m.dob),
+      eligibleReceipts: AgeCalculator.getEligibleReceiptTypes(m.gender, m.dob),
+    })),
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  };
+}
 
 export interface MemberQueryOptions {
   search?: string;
@@ -64,19 +121,7 @@ export class MemberService {
         orderBy: { memberCode: 'asc' },
         skip,
         take: limit,
-        include: {
-          surname: { select: { id: true, displayName: true } },
-          firm: { select: { id: true, firmCode: true, firmName: true } },
-          members: {
-            include: {
-              parentalSurname: { select: { id: true, displayName: true } },
-            },
-            orderBy: { dob: 'asc' },
-          },
-          _count: {
-            select: { members: true },
-          },
-        },
+        include: FAMILY_INCLUDE,
       }),
     ]);
 
@@ -85,66 +130,22 @@ export class MemberService {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
-      records: records.map((r) => ({
-        id: r.id,
-        memberCode: r.memberCode,
-        memberType: r.memberType,
-        familyId: r.familyId,
-        familyHeadName: r.familyHeadName,
-        surnameId: r.surnameId,
-        surname: r.surname.displayName,
-        firmId: r.firmId,
-        firmCode: r.firm.firmCode,
-        firmName: r.firm.firmName,
-        homeAddress: r.homeAddress,
-        male18PlusCount: r.male18PlusCount,
-        totalMembers: r._count.members,
-        members: r.members.map((m) => ({
-          id: m.id,
-          name: m.name,
-          dob: m.dob,
-          age: AgeCalculator.calculateAge(m.dob),
-          gender: m.gender,
-          mobile: m.mobile,
-          bloodGroup: m.bloodGroup,
-          maritalStatus: m.maritalStatus,
-          parentalSurnameId: m.parentalSurnameId,
-          parentalSurname: m.parentalSurname?.displayName,
-          is18PlusMale: AgeCalculator.is18PlusMale(m.gender, m.dob),
-          eligibleReceipts: AgeCalculator.getEligibleReceiptTypes(m.gender, m.dob),
-        })),
-        createdAt: r.createdAt,
-        updatedAt: r.updatedAt,
-      })),
+      records: records.map(toFamilyDto),
     };
   }
 
   public static async getById(id: string) {
     const record = await prisma.memberRecord.findUnique({
       where: { id },
-      include: {
-        surname: true,
-        firm: { include: { area: true } },
-        members: {
-          include: { parentalSurname: true },
-          orderBy: { dob: 'asc' },
-        },
-      },
+      include: FAMILY_INCLUDE,
     });
 
     if (!record) {
       throw new AppError('Family record not found.', 404, 'NOT_FOUND');
     }
 
-    return {
-      ...record,
-      members: record.members.map((m) => ({
-        ...m,
-        age: AgeCalculator.calculateAge(m.dob),
-        is18PlusMale: AgeCalculator.is18PlusMale(m.gender, m.dob),
-        eligibleReceipts: AgeCalculator.getEligibleReceiptTypes(m.gender, m.dob),
-      })),
-    };
+    // Same flat shape as getAll so the client can render either response.
+    return toFamilyDto(record);
   }
 
   public static async createFamily(input: CreateFamilyInput, userId?: string) {
@@ -232,7 +233,7 @@ export class MemberService {
             mobile: m.mobile.trim(),
             bloodGroup: m.bloodGroup as BloodGroup,
             maritalStatus: m.maritalStatus as MaritalStatus,
-            parentalSurnameId: m.parentalSurnameId || null,
+            parentalSurnameId: allowsParentalSurname(m.gender, m.maritalStatus) ? m.parentalSurnameId || null : null,
           })),
         });
       }
@@ -401,7 +402,9 @@ export class MemberService {
           mobile: input.mobile.trim(),
           bloodGroup: (input.bloodGroup as BloodGroup) || BloodGroup.UNKNOWN,
           maritalStatus: (input.maritalStatus as MaritalStatus) || MaritalStatus.UNMARRIED,
-          parentalSurnameId: input.parentalSurnameId || null,
+          parentalSurnameId: allowsParentalSurname(input.gender, input.maritalStatus)
+            ? input.parentalSurnameId || null
+            : null,
         },
       });
 
@@ -447,7 +450,14 @@ export class MemberService {
           mobile: input.mobile ? input.mobile.trim() : undefined,
           bloodGroup: input.bloodGroup ? (input.bloodGroup as BloodGroup) : undefined,
           maritalStatus: input.maritalStatus ? (input.maritalStatus as MaritalStatus) : undefined,
-          parentalSurnameId: input.parentalSurnameId !== undefined ? input.parentalSurnameId : undefined,
+          parentalSurnameId: !allowsParentalSurname(
+            input.gender ?? existing.gender,
+            input.maritalStatus ?? existing.maritalStatus
+          )
+            ? null
+            : input.parentalSurnameId !== undefined
+              ? input.parentalSurnameId
+              : undefined,
         },
       });
 

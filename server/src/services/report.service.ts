@@ -1,6 +1,13 @@
 import { prisma } from '../db/prisma.js';
 import { AgeCalculator } from '../utils/ageCalculator.js';
 import { NiyariFilterInput } from '../schemas/receipt.schema.js';
+import {
+  buildAgeGenderBands,
+  buildAreaDistribution,
+  buildBloodGroups,
+  buildMonthlyCollection,
+  monthlyWindowStart,
+} from '../utils/dashboardCharts.js';
 
 export class ReportService {
   /**
@@ -153,6 +160,13 @@ export class ReportService {
       receiptStats,
       monthlyCollections,
       recentActivities,
+      memberDemographics,
+      bloodGroupCounts,
+      maritalCounts,
+      firmsWithArea,
+      receiptsInWindow,
+      receiptsByType,
+      receiptTypes,
     ] = await Promise.all([
       prisma.firm.count(),
       prisma.memberRecord.count(),
@@ -169,7 +183,7 @@ export class ReportService {
       }),
       prisma.receipt.findMany({
         where: { status: 'ACTIVE' },
-        select: { amount: true, generatedAt: true, receiptType: { select: { name: true } } },
+        select: { id: true, receiptNumber: true, amount: true, generatedAt: true, receiptType: { select: { name: true } } },
         orderBy: { generatedAt: 'desc' },
         take: 100,
       }),
@@ -177,7 +191,26 @@ export class ReportService {
         orderBy: { occurredAt: 'desc' },
         take: 10,
       }),
+      prisma.individualMember.findMany({ select: { dob: true, gender: true } }),
+      prisma.individualMember.groupBy({ by: ['bloodGroup'], _count: { _all: true } }),
+      prisma.individualMember.groupBy({ by: ['maritalStatus'], _count: { _all: true } }),
+      prisma.firm.findMany({
+        select: { area: { select: { displayName: true } }, _count: { select: { memberRecords: true } } },
+      }),
+      prisma.receipt.findMany({
+        where: { status: 'ACTIVE', generatedAt: { gte: monthlyWindowStart(12) } },
+        select: { amount: true, generatedAt: true },
+      }),
+      prisma.receipt.groupBy({
+        by: ['receiptTypeId'],
+        where: { status: 'ACTIVE' },
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
+      prisma.receiptType.findMany({ select: { id: true, name: true } }),
     ]);
+
+    const typeNames = new Map(receiptTypes.map((t) => [t.id, t.name]));
 
     const totalCollection = Number(receiptStats._sum.amount || 0);
 
@@ -196,6 +229,24 @@ export class ReportService {
       },
       recentActivities,
       recentReceipts: monthlyCollections,
+      charts: {
+        ageGender: buildAgeGenderBands(memberDemographics),
+        monthlyCollection: buildMonthlyCollection(receiptsInWindow, 12),
+        areas: buildAreaDistribution(
+          firmsWithArea.map((f) => ({ areaName: f.area.displayName, families: f._count.memberRecords }))
+        ),
+        bloodGroups: buildBloodGroups(
+          bloodGroupCounts.map((g) => ({ bloodGroup: g.bloodGroup, count: g._count._all }))
+        ),
+        maritalStatus: maritalCounts.map((m) => ({ status: m.maritalStatus, count: m._count._all })),
+        receiptTypes: receiptsByType
+          .map((r) => ({
+            name: typeNames.get(r.receiptTypeId) ?? 'Unknown',
+            amount: Number(r._sum.amount || 0),
+            count: r._count._all,
+          }))
+          .sort((a, b) => b.amount - a.amount),
+      },
     };
   }
 }

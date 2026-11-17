@@ -51,7 +51,7 @@ export const NiyariReport: React.FC = () => {
       const [surRes, areasRes, firmsRes] = await Promise.all([
         api.get('/v1/surnames'),
         api.get('/v1/areas'),
-        api.get('/v1/firms'),
+        api.get('/v1/firms', { params: { limit: 1000 } }), // full list for the filter dropdown
       ]);
       setSurnames(surRes.data.data);
       setAreas(areasRes.data.data);

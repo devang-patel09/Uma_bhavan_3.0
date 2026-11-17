@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { prisma } from '../src/db/prisma.js';
 import { AgeCalculator } from '../src/utils/ageCalculator.js';
-import { MemberService } from '../src/services/member.service.js';
+import { MemberService, allowsParentalSurname } from '../src/services/member.service.js';
 
 describe('Member Master & Family Migration Rules', () => {
   beforeEach(() => {
@@ -259,3 +259,82 @@ describe('Member Master & Family Migration Rules', () => {
   });
 });
 
+
+describe('Parental Surname Rule (married women only)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('allows a parental surname only for FEMALE + MARRIED', () => {
+    expect(allowsParentalSurname('FEMALE', 'MARRIED')).toBe(true);
+    expect(allowsParentalSurname('FEMALE', 'UNMARRIED')).toBe(false);
+    expect(allowsParentalSurname('MALE', 'MARRIED')).toBe(false);
+    expect(allowsParentalSurname('MALE', 'UNMARRIED')).toBe(false);
+  });
+
+  it('drops parentalSurnameId when adding an unmarried female', async () => {
+    vi.spyOn(prisma.memberRecord, 'findUnique').mockResolvedValue({
+      id: 'fam_1',
+      memberCode: 'M001',
+      members: [],
+    } as any);
+    vi.spyOn(prisma.individualMember, 'findFirst').mockResolvedValue(null);
+    const create = vi.fn().mockResolvedValue({ id: 'mem_3', name: 'Priya Patel' });
+    vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) =>
+      callback({
+        individualMember: { create, findMany: vi.fn().mockResolvedValue([]) },
+        memberRecord: { update: vi.fn().mockResolvedValue({}) },
+      })
+    );
+    vi.spyOn(prisma.auditLog, 'create').mockResolvedValue({} as any);
+
+    await MemberService.addIndividualMember('fam_1', {
+      name: 'Priya Patel',
+      dob: '2002-01-01',
+      gender: 'FEMALE',
+      mobile: '9825011111',
+      maritalStatus: 'UNMARRIED',
+      parentalSurnameId: '11111111-1111-4111-8111-111111111111',
+      allowDuplicate: false,
+    } as any);
+
+    expect(create.mock.calls[0][0].data.parentalSurnameId).toBeNull();
+  });
+
+  it('getById returns flat family shape with parentalSurname as a display string', async () => {
+    vi.spyOn(prisma.memberRecord, 'findUnique').mockResolvedValue({
+      id: 'fam_1',
+      memberCode: 'M001',
+      memberType: 'PERMANENT',
+      familyId: 'FAM-1',
+      familyHeadName: 'Kiritbhai',
+      surnameId: 'sur_1',
+      surname: { id: 'sur_1', displayName: 'Patel' },
+      firmId: 'firm_1',
+      firm: { id: 'firm_1', firmCode: 'F001', firmName: 'Umiya Traders', firmType: 'PERMANENT' },
+      homeAddress: 'Anand',
+      male18PlusCount: 0,
+      _count: { members: 1 },
+      members: [
+        {
+          id: 'mem_1',
+          name: 'Meena Patel',
+          dob: new Date('1995-01-01T00:00:00Z'),
+          gender: 'FEMALE',
+          mobile: '9825022222',
+          bloodGroup: 'A_NEGATIVE',
+          maritalStatus: 'MARRIED',
+          parentalSurnameId: 'sur_2',
+          parentalSurname: { id: 'sur_2', displayName: 'Amin' },
+        },
+      ],
+    } as any);
+
+    const fam = await MemberService.getById('fam_1');
+    expect(fam.surname).toBe('Patel');
+    expect(fam.firmCode).toBe('F001');
+    expect(fam.firmName).toBe('Umiya Traders');
+    expect(fam.totalMembers).toBe(1);
+    expect(fam.members[0].parentalSurname).toBe('Amin');
+  });
+});

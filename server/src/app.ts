@@ -18,6 +18,8 @@ app.use(
   cors({
     origin: env.CORS_ORIGIN,
     credentials: true,
+    // Let the browser read the download filename and backup metadata headers.
+    exposedHeaders: ['Content-Disposition', 'X-Backup-Checksum', 'X-Backup-Schema-Version'],
   })
 );
 

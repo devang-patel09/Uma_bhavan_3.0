@@ -73,6 +73,23 @@ export class BackupController {
   }
 
   /**
+   * GET /api/v1/backups/:id/download
+   * Downloads a backup file stored on the server (e.g. a pre-restore safety backup).
+   * Super Admin only.
+   */
+  static async downloadBackup(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { fileName, data } = await BackupService.getBackupFile(req.params.id);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('Content-Length', data.length);
+      res.end(data);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * GET /api/v1/backups
    * Lists backup metadata records (most recent first).
    * Super Admin only.

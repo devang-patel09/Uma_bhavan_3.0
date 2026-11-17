@@ -1,20 +1,28 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Download,
   Upload,
   ShieldCheck,
-  ShieldAlert,
   AlertTriangle,
   CheckCircle2,
+  XCircle,
   Loader2,
-  Clock,
-  Hash,
-  RefreshCw,
-  Database,
-  Info,
+  Lock,
+  FileCheck2,
+  PackageCheck,
+  GitCompareArrows,
+  HardDrive,
+  History,
+  CloudDownload,
+  RotateCcw,
+  FileArchive,
   X,
+  ArrowRight,
+  RefreshCw,
+  Server,
 } from 'lucide-react';
 import { api } from '../services/api.js';
+import { useEscapeKey } from '../hooks/useHotkeys.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface BackupRecord {
@@ -24,7 +32,8 @@ interface BackupRecord {
   schemaVersion: string;
   checksum: string;
   createdAt: string;
-  createdBy: { id: string; username: string };
+  createdBy?: { id: string; username: string };
+  fileAvailable?: boolean;
 }
 
 interface ValidationResult {
@@ -33,515 +42,528 @@ interface ValidationResult {
   createdAt: string;
   checksum: string;
   checksumMatch: boolean;
+  restorable?: boolean;
+  schemaMatches?: boolean;
+  currentSchemaVersion?: string;
+  tableCount?: number;
+  sizeBytes?: number;
 }
 
-type ActionStatus = 'idle' | 'loading' | 'success' | 'error';
+type Status = 'idle' | 'loading' | 'success' | 'error';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+const formatDate = (iso: string) =>
+  new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+
+const timeAgo = (iso: string) => {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} hr ago`;
+  return `${Math.floor(s / 86400)} day${s >= 172800 ? 's' : ''} ago`;
+};
+
+const formatSize = (bytes?: number) =>
+  bytes === undefined ? '—' : bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+/** Saves a blob response as a file using the server-provided filename. */
+function saveBlob(response: { data: unknown; headers: Record<string, unknown> }, fallback: string) {
+  const disposition = String(response.headers['content-disposition'] ?? '');
+  const fileName = disposition.match(/filename="(.+?)"/)?.[1] ?? fallback;
+  const url = URL.createObjectURL(new Blob([response.data as BlobPart]));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+  return fileName;
 }
 
-function truncateHash(hash: string) {
-  return `${hash.substring(0, 8)}…${hash.substring(hash.length - 8)}`;
+/** Blob requests hide the server's JSON error; read it back out. */
+async function errorMessage(err: unknown, fallback: string): Promise<string> {
+  const data = (err as { response?: { data?: unknown } })?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      return JSON.parse(await data.text())?.error?.message ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return err instanceof Error ? err.message : fallback;
 }
 
-// ─── ConfirmModal ─────────────────────────────────────────────────────────────
-interface ConfirmModalProps {
+// ─── Small pieces ─────────────────────────────────────────────────────────────
+const Alert: React.FC<{ tone: 'success' | 'error' | 'warning'; children: React.ReactNode }> = ({ tone, children }) => {
+  const styles = {
+    success: 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-200',
+    error: 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200',
+    warning: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200',
+  }[tone];
+  const Icon = tone === 'success' ? CheckCircle2 : tone === 'error' ? XCircle : AlertTriangle;
+  return (
+    <div className={`flex items-start gap-2.5 rounded-xl border p-3 text-sm ${styles}`}>
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+};
+
+const Check: React.FC<{ ok: boolean | undefined; warn?: boolean; icon: React.ElementType; label: string; detail: string }> = ({
+  ok, warn, icon: Icon, label, detail,
+}) => {
+  const tone = ok ? 'text-emerald-600 dark:text-emerald-400' : warn ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400';
+  const Mark = ok ? CheckCircle2 : warn ? AlertTriangle : XCircle;
+  return (
+    <li className="flex items-center gap-3 rounded-lg px-2 py-1.5">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{label}</p>
+        <p className="truncate text-xs text-slate-500 dark:text-slate-400">{detail}</p>
+      </div>
+      <Mark className={`h-5 w-5 shrink-0 ${tone}`} />
+    </li>
+  );
+};
+
+// ─── Confirm restore popup ────────────────────────────────────────────────────
+const ConfirmRestore: React.FC<{
   fileName: string;
   validation: ValidationResult;
+  busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
-  isRestoring: boolean;
-}
-
-const ConfirmModal: React.FC<ConfirmModalProps> = ({ fileName, validation, onConfirm, onCancel, isRestoring }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-    <div className="relative w-full max-w-md rounded-2xl border border-red-500/30 bg-slate-900 p-6 shadow-2xl">
-      <button
-        onClick={onCancel}
-        className="absolute top-4 right-4 text-slate-500 hover:text-white transition"
-        aria-label="Cancel"
+}> = ({ fileName, validation, busy, onConfirm, onCancel }) => {
+  const steps = [
+    { icon: ShieldCheck, text: 'A safety copy of today’s data is saved first' },
+    { icon: RotateCcw, text: 'All current data is replaced with the backup' },
+    { icon: CheckCircle2, text: 'You can download the safety copy any time' },
+  ];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={busy ? undefined : onCancel}>
+      <div
+        className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900"
+        onClick={(e) => e.stopPropagation()}
       >
-        <X className="h-5 w-5" />
-      </button>
+        <div className="flex items-start justify-between">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-400">
+            <RotateCcw className="h-6 w-6" />
+          </div>
+          <button onClick={onCancel} disabled={busy} className="text-slate-400 hover:text-slate-600 disabled:opacity-40" aria-label="Cancel">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <h2 className="mt-4 text-lg font-bold text-slate-900 dark:text-white">Restore this backup?</h2>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          Data will go back to how it was on <strong className="text-slate-800 dark:text-slate-200">{formatDate(validation.createdAt)}</strong>.
+        </p>
 
-      <div className="flex items-start gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-red-400">
-          <AlertTriangle className="h-5 w-5" />
+        <div className="mt-4 flex items-center gap-2 rounded-xl bg-slate-50 p-3 text-xs dark:bg-slate-800/60">
+          <FileArchive className="h-4 w-4 shrink-0 text-brand-terracotta" />
+          <span className="truncate font-medium text-slate-700 dark:text-slate-200">{fileName}</span>
         </div>
-        <div>
-          <h2 className="text-base font-bold text-white">Confirm Database Restore</h2>
-          <p className="mt-1 text-xs text-slate-400">
-            This will <span className="font-semibold text-red-400">overwrite all current data</span>. A safety backup
-            will be created automatically before proceeding.
-          </p>
-        </div>
-      </div>
 
-      <div className="mt-5 rounded-lg border border-slate-700 bg-slate-800 p-4 space-y-2 text-xs">
-        <div className="flex justify-between">
-          <span className="text-slate-400">File</span>
-          <span className="text-slate-200 font-medium truncate max-w-[220px]">{fileName}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-slate-400">Backup Date</span>
-          <span className="text-slate-200">{formatDate(validation.createdAt)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-slate-400">Schema</span>
-          <span className="text-slate-200 font-mono">{validation.schemaVersion}</span>
-        </div>
-        <div className="flex justify-between items-center">
-          <span className="text-slate-400">Integrity</span>
-          {validation.checksumMatch ? (
-            <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
-              <CheckCircle2 className="h-3.5 w-3.5" /> Verified
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 text-red-400 font-medium">
-              <ShieldAlert className="h-3.5 w-3.5" /> Checksum Mismatch
-            </span>
-          )}
-        </div>
-      </div>
+        <ol className="mt-4 space-y-2.5">
+          {steps.map(({ icon: Icon, text }, i) => (
+            <li key={i} className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-terracotta dark:bg-brand-950/60 dark:text-brand-300">
+                <Icon className="h-3.5 w-3.5" />
+              </span>
+              {text}
+            </li>
+          ))}
+        </ol>
 
-      {!validation.checksumMatch && (
-        <div className="mt-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs text-yellow-300 flex items-start gap-2">
-          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-yellow-400" />
-          <span>
-            The backup file integrity check failed. Proceeding may restore corrupt data. Consider using a different
-            backup file.
-          </span>
+        <div className="mt-6 flex gap-3">
+          <button onClick={onCancel} disabled={busy} className="btn-secondary flex-1">
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-red-500 disabled:opacity-60"
+          >
+            {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Restoring…</> : <><RotateCcw className="h-4 w-4" /> Yes, restore</>}
+          </button>
         </div>
-      )}
-
-      <div className="mt-5 flex gap-3">
-        <button
-          onClick={onCancel}
-          disabled={isRestoring}
-          className="flex-1 rounded-lg border border-slate-600 py-2.5 text-sm font-semibold text-slate-300 hover:border-slate-400 hover:text-white transition disabled:opacity-50"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={onConfirm}
-          disabled={isRestoring}
-          className="flex-1 rounded-lg bg-red-600 py-2.5 text-sm font-bold text-white shadow-lg hover:bg-red-500 transition disabled:opacity-50 flex items-center justify-center gap-2"
-        >
-          {isRestoring ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Restoring…
-            </>
-          ) : (
-            'Restore Database'
-          )}
-        </button>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
-// ─── Main Page ─────────────────────────────────────────────────────────────────
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export const BackupRestore: React.FC = () => {
-  // Backup creation
-  const [backupStatus, setBackupStatus] = useState<ActionStatus>('idle');
-  const [backupError, setBackupError] = useState('');
+  // Backup
+  const [backupStatus, setBackupStatus] = useState<Status>('idle');
+  const [backupMsg, setBackupMsg] = useState('');
 
-  // Restore flow
-  const [restoreFile, setRestoreFile] = useState<File | null>(null);
-  const [validateStatus, setValidateStatus] = useState<ActionStatus>('idle');
-  const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
-  const [validateError, setValidateError] = useState('');
+  // Restore
+  const [file, setFile] = useState<File | null>(null);
+  const [checkStatus, setCheckStatus] = useState<Status>('idle');
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [checkError, setCheckError] = useState('');
+  const [dragOver, setDragOver] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [restoreStatus, setRestoreStatus] = useState<ActionStatus>('idle');
-  const [restoreMessage, setRestoreMessage] = useState('');
-  const [restoreError, setRestoreError] = useState('');
+  const [restoreStatus, setRestoreStatus] = useState<Status>('idle');
+  const [restoreMsg, setRestoreMsg] = useState('');
+  const [safetyFile, setSafetyFile] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  useEscapeKey(() => setShowConfirm(false), showConfirm && restoreStatus !== 'loading');
 
   // History
   const [records, setRecords] = useState<BackupRecord[]>([]);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState('');
+  const [historyStatus, setHistoryStatus] = useState<Status>('idle');
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // ── Backup creation ──────────────────────────────────────────────────────────
-  const handleCreateBackup = useCallback(async () => {
-    setBackupStatus('loading');
-    setBackupError('');
-    try {
-      const response = await api.post('/v1/backups', {}, { responseType: 'blob' });
-      const disposition = response.headers['content-disposition'] as string;
-      const fileNameMatch = disposition?.match(/filename="(.+?)"/);
-      const fileName = fileNameMatch?.[1] ?? `uma-bhavan-backup-${Date.now()}.ubak`;
-
-      const url = URL.createObjectURL(new Blob([response.data as BlobPart]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      setBackupStatus('success');
-      // Refresh history
-      loadHistory();
-      setTimeout(() => setBackupStatus('idle'), 4000);
-    } catch (err: unknown) {
-      setBackupStatus('error');
-      setBackupError(err instanceof Error ? err.message : 'Backup creation failed.');
-    }
-  }, []);
-
-  // ── Validate file ────────────────────────────────────────────────────────────
-  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setRestoreFile(file);
-    setValidationResult(null);
-    setValidateError('');
-    setValidateStatus('loading');
-    setRestoreStatus('idle');
-    setRestoreError('');
-    setRestoreMessage('');
-
-    try {
-      const buffer = await file.arrayBuffer();
-      const response = await api.post<{ data: ValidationResult }>('/v1/backups/validate', buffer, {
-        headers: { 'Content-Type': 'application/octet-stream' },
-      });
-      setValidationResult(response.data.data);
-      setValidateStatus('success');
-    } catch (err: unknown) {
-      setValidateStatus('error');
-      setValidateError(err instanceof Error ? err.message : 'Failed to validate backup file.');
-    }
-  }, []);
-
-  // ── Restore ──────────────────────────────────────────────────────────────────
-  const handleRestoreConfirm = useCallback(async () => {
-    if (!restoreFile) return;
-    setRestoreStatus('loading');
-    setRestoreError('');
-    setRestoreMessage('');
-
-    try {
-      const buffer = await restoreFile.arrayBuffer();
-      const response = await api.post<{ message: string; data: { safetyBackupFileName: string } }>(
-        '/v1/backups/restore',
-        buffer,
-        { headers: { 'Content-Type': 'application/octet-stream' } },
-      );
-      setRestoreStatus('success');
-      setRestoreMessage(
-        `${response.data.message} Safety backup: ${response.data.data.safetyBackupFileName}`,
-      );
-      setShowConfirm(false);
-      setValidationResult(null);
-      setRestoreFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      loadHistory();
-    } catch (err: unknown) {
-      setRestoreStatus('error');
-      setRestoreError(err instanceof Error ? err.message : 'Restore failed. The safety backup was preserved.');
-      setShowConfirm(false);
-    }
-  }, [restoreFile]);
-
-  // ── History ──────────────────────────────────────────────────────────────────
   const loadHistory = useCallback(async () => {
-    setHistoryLoading(true);
-    setHistoryError('');
+    setHistoryStatus('loading');
     try {
       const res = await api.get<{ data: BackupRecord[] }>('/v1/backups');
       setRecords(res.data.data);
-      setHistoryLoaded(true);
-    } catch (err: unknown) {
-      setHistoryError(err instanceof Error ? err.message : 'Failed to load backup history.');
-    } finally {
-      setHistoryLoading(false);
+      setHistoryStatus('success');
+    } catch {
+      setHistoryStatus('error');
     }
   }, []);
 
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  const handleBackup = async () => {
+    setBackupStatus('loading');
+    setBackupMsg('');
+    try {
+      const res = await api.post('/v1/backups', {}, { responseType: 'blob' });
+      const name = saveBlob(res as never, `uma-bhavan-backup-${Date.now()}.ubak`);
+      setBackupStatus('success');
+      setBackupMsg(name);
+      loadHistory();
+    } catch (err) {
+      setBackupStatus('error');
+      setBackupMsg(await errorMessage(err, 'Backup failed.'));
+    }
+  };
+
+  const resetRestore = () => {
+    setFile(null);
+    setValidation(null);
+    setCheckStatus('idle');
+    setCheckError('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const checkFile = async (f: File) => {
+    setFile(f);
+    setValidation(null);
+    setCheckError('');
+    setRestoreStatus('idle');
+    setRestoreMsg('');
+    if (!f.name.toLowerCase().endsWith('.ubak')) {
+      setCheckStatus('error');
+      setCheckError('Please choose a Uma Bhavan backup file (ending in .ubak).');
+      return;
+    }
+    setCheckStatus('loading');
+    try {
+      const res = await api.post<{ data: ValidationResult }>('/v1/backups/validate', await f.arrayBuffer(), {
+        headers: { 'Content-Type': 'application/octet-stream' },
+      });
+      setValidation(res.data.data);
+      setCheckStatus('success');
+    } catch (err) {
+      setCheckStatus('error');
+      setCheckError(await errorMessage(err, 'This file could not be read.'));
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!file) return;
+    setRestoreStatus('loading');
+    try {
+      const res = await api.post<{ data: { safetyBackupFileName: string } }>('/v1/backups/restore', await file.arrayBuffer(), {
+        headers: { 'Content-Type': 'application/octet-stream' },
+      });
+      setRestoreStatus('success');
+      setSafetyFile(res.data.data.safetyBackupFileName);
+      setShowConfirm(false);
+      resetRestore();
+      loadHistory();
+    } catch (err) {
+      setRestoreStatus('error');
+      setRestoreMsg(await errorMessage(err, 'Restore failed. Your data was not changed after the safety copy.'));
+      setShowConfirm(false);
+    }
+  };
+
+  const downloadRecord = async (r: BackupRecord) => {
+    setDownloadingId(r.id);
+    try {
+      const res = await api.get(`/v1/backups/${r.id}/download`, { responseType: 'blob' });
+      saveBlob(res as never, r.fileName);
+    } catch (err) {
+      alert(await errorMessage(err, 'Download failed.'));
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const lastBackup = records.find((r) => r.backupType === 'MANUAL') ?? records[0];
+  const storedCount = records.filter((r) => r.fileAvailable).length;
+  const canRestore = !!validation && validation.valid && validation.restorable !== false;
+
   return (
-    <div className="max-w-4xl mx-auto space-y-8 py-2">
+    <div className="mx-auto max-w-5xl space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-          <Database className="h-7 w-7 text-brand-orange" />
-          Backup &amp; Restore
-        </h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Download an encrypted backup of the database, or restore from a previous backup file.
-        </p>
+        <div className="flex items-center gap-2">
+          <HardDrive className="h-6 w-6 text-brand-terracotta" />
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">Backup &amp; Restore</h1>
+        </div>
+        <p className="text-sm text-slate-500 dark:text-slate-400">Keep a safe copy of all community data, and bring it back when needed.</p>
       </div>
 
-      {/* ── Create Backup ─────────────────────────────────────────────── */}
-      <section className="card-glass rounded-2xl border border-slate-700/60 p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-white flex items-center gap-2">
-              <Download className="h-4 w-4 text-brand-orange" />
-              Create Backup
-            </h2>
-            <p className="mt-1 text-xs text-slate-400 max-w-lg">
-              Downloads an AES-256 encrypted backup package (.ubak) to your computer. Keep this file safe — it contains
-              all community data.
-            </p>
-          </div>
-          <button
-            id="btn-create-backup"
-            onClick={handleCreateBackup}
-            disabled={backupStatus === 'loading'}
-            className="shrink-0 btn-primary flex items-center gap-2 px-5 py-2.5 text-sm font-bold disabled:opacity-60"
-          >
-            {backupStatus === 'loading' ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Creating…
-              </>
-            ) : (
-              <>
-                <Download className="h-4 w-4" /> Download Backup
-              </>
-            )}
-          </button>
-        </div>
-
-        {backupStatus === 'success' && (
-          <div className="mt-4 flex items-center gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-            Backup created and downloaded successfully.
-          </div>
-        )}
-        {backupStatus === 'error' && (
-          <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
-            <ShieldAlert className="h-4 w-4 shrink-0 text-red-400 mt-0.5" />
-            {backupError}
-          </div>
-        )}
-      </section>
-
-      {/* ── Restore ───────────────────────────────────────────────────── */}
-      <section className="card-glass rounded-2xl border border-slate-700/60 p-6 space-y-5">
-        <div>
-          <h2 className="text-base font-semibold text-white flex items-center gap-2">
-            <Upload className="h-4 w-4 text-brand-orange" />
-            Restore from Backup
-          </h2>
-          <p className="mt-1 text-xs text-slate-400">
-            Upload a .ubak file. The system will validate it, automatically create a safety backup of the current data,
-            then restore.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2.5 rounded-lg border border-yellow-500/25 bg-yellow-500/8 p-3 text-xs text-yellow-300">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-yellow-400" />
-          <span>
-            <strong>Warning:</strong> Restore is a destructive operation. All current data will be replaced by the
-            backup. A safety backup will be created automatically before proceeding.
-          </span>
-        </div>
-
-        {/* File picker */}
-        <div>
-          <label
-            htmlFor="restore-file-input"
-            className="block text-xs font-semibold text-slate-300 mb-2"
-          >
-            Select Backup File (.ubak)
-          </label>
-          <input
-            id="restore-file-input"
-            ref={fileInputRef}
-            type="file"
-            accept=".ubak"
-            onChange={handleFileChange}
-            className="block w-full text-sm text-slate-300 file:mr-4 file:rounded-lg file:border file:border-brand-orange/40 file:bg-brand-orange/10 file:px-4 file:py-2 file:text-xs file:font-semibold file:text-brand-orange hover:file:bg-brand-orange/20 file:cursor-pointer cursor-pointer transition"
-          />
-        </div>
-
-        {/* Validation in progress */}
-        {validateStatus === 'loading' && (
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Loader2 className="h-4 w-4 animate-spin text-brand-orange" />
-            Validating backup file…
-          </div>
-        )}
-
-        {/* Validation error */}
-        {validateStatus === 'error' && (
-          <div className="flex items-start gap-2.5 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
-            <ShieldAlert className="h-4 w-4 shrink-0 text-red-400 mt-0.5" />
-            {validateError}
-          </div>
-        )}
-
-        {/* Validation success card */}
-        {validationResult && validateStatus === 'success' && (
-          <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                {validationResult.valid ? (
-                  <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                ) : (
-                  <ShieldAlert className="h-4 w-4 text-red-400" />
-                )}
-                Validation Result
-              </h3>
-              <span
-                className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                  validationResult.valid
-                    ? 'bg-emerald-500/20 text-emerald-300'
-                    : 'bg-red-500/20 text-red-300'
-                }`}
-              >
-                {validationResult.valid ? 'VALID' : 'INTEGRITY FAIL'}
-              </span>
+      {/* Status strip */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {[
+          {
+            icon: History,
+            label: 'Last backup',
+            value: lastBackup ? timeAgo(lastBackup.createdAt) : historyStatus === 'loading' ? '…' : 'Never',
+            tone: lastBackup ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 dark:text-emerald-400' : 'text-amber-600 bg-amber-50 dark:bg-amber-950/50 dark:text-amber-400',
+          },
+          { icon: Server, label: 'Copies on server', value: String(storedCount), tone: 'text-blue-600 bg-blue-50 dark:bg-blue-950/50 dark:text-blue-400' },
+          { icon: Lock, label: 'Protection', value: 'AES-256 encrypted', tone: 'text-brand-terracotta bg-brand-50 dark:bg-brand-950/50 dark:text-brand-300' },
+        ].map(({ icon: Icon, label, value, tone }) => (
+          <div key={label} className="card-premium flex items-center gap-3 p-4 hover:shadow-sm">
+            <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${tone}`}>
+              <Icon className="h-5 w-5" />
             </div>
-
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <p className="text-slate-500 mb-0.5">Backup Date</p>
-                <p className="text-slate-200 font-medium">{formatDate(validationResult.createdAt)}</p>
-              </div>
-              <div>
-                <p className="text-slate-500 mb-0.5">Schema Version</p>
-                <p className="text-slate-200 font-mono">{validationResult.schemaVersion}</p>
-              </div>
-              <div className="col-span-2">
-                <p className="text-slate-500 mb-0.5 flex items-center gap-1">
-                  <Hash className="h-3 w-3" /> Checksum
-                </p>
-                <p className="text-slate-300 font-mono text-xs">{truncateHash(validationResult.checksum)}</p>
-              </div>
+            <div>
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</p>
+              <p className="text-sm font-bold text-slate-900 dark:text-white">{value}</p>
             </div>
+          </div>
+        ))}
+      </div>
 
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* ── Backup card ── */}
+        <section className="card-premium flex flex-col p-6 hover:shadow-sm">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 text-white shadow-sm">
+            <CloudDownload className="h-7 w-7" />
+          </div>
+          <h2 className="mt-4 text-lg font-bold text-slate-900 dark:text-white">Backup now</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Download a locked copy of every firm, family, member and receipt.</p>
+
+          <ul className="mt-4 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+            {[
+              [Lock, 'Encrypted, only this system can open it'],
+              [Server, 'A copy is also kept on the server'],
+              [ShieldCheck, 'Checked for completeness before saving'],
+            ].map(([Icon, text], i) => {
+              const I = Icon as React.ElementType;
+              return (
+                <li key={i} className="flex items-center gap-2.5">
+                  <I className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                  {text as string}
+                </li>
+              );
+            })}
+          </ul>
+
+          <div className="mt-auto pt-6">
             <button
-              id="btn-restore-confirm"
-              onClick={() => setShowConfirm(true)}
-              className="w-full rounded-lg bg-red-600 py-2.5 text-sm font-bold text-white hover:bg-red-500 transition flex items-center justify-center gap-2"
+              onClick={handleBackup}
+              disabled={backupStatus === 'loading'}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:brightness-105 active:scale-[0.99] disabled:opacity-60"
             >
-              <Upload className="h-4 w-4" />
-              Restore This Backup
+              {backupStatus === 'loading' ? <><Loader2 className="h-5 w-5 animate-spin" /> Creating backup…</> : <><Download className="h-5 w-5" /> Download backup</>}
             </button>
+            {backupStatus === 'success' && (
+              <div className="mt-3">
+                <Alert tone="success">
+                  <p className="font-semibold">Backup saved</p>
+                  <p className="truncate text-xs opacity-80">{backupMsg}</p>
+                </Alert>
+              </div>
+            )}
+            {backupStatus === 'error' && (
+              <div className="mt-3">
+                <Alert tone="error">{backupMsg}</Alert>
+              </div>
+            )}
           </div>
-        )}
+        </section>
 
-        {/* Restore success */}
-        {restoreStatus === 'success' && (
-          <div className="flex items-start gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-200">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400 mt-0.5" />
-            <span>{restoreMessage}</span>
+        {/* ── Restore card ── */}
+        <section className="card-premium flex flex-col p-6 hover:shadow-sm">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-brand-terracotta text-white shadow-sm">
+            <RotateCcw className="h-7 w-7" />
           </div>
-        )}
+          <h2 className="mt-4 text-lg font-bold text-slate-900 dark:text-white">Restore</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Bring data back from a backup file. A safety copy is made first.</p>
 
-        {/* Restore error */}
-        {restoreStatus === 'error' && (
-          <div className="flex items-start gap-2.5 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
-            <ShieldAlert className="h-4 w-4 shrink-0 text-red-400 mt-0.5" />
-            {restoreError}
+          {/* Drop zone */}
+          {!file && (
+            <label
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const f = e.dataTransfer.files?.[0];
+                if (f) checkFile(f);
+              }}
+              className={`mt-4 flex flex-1 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 text-center transition ${
+                dragOver
+                  ? 'border-brand-orange bg-brand-50 dark:bg-brand-950/40'
+                  : 'border-slate-300 hover:border-brand-orange hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/50'
+              }`}
+            >
+              <Upload className="h-8 w-8 text-slate-400" />
+              <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Drop a .ubak file here</span>
+              <span className="text-xs text-slate-500">or click to choose</span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".ubak"
+                className="sr-only"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) checkFile(f); }}
+              />
+            </label>
+          )}
+
+          {/* File checks */}
+          {file && (
+            <div className="mt-4 flex flex-1 flex-col">
+              <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60">
+                <FileArchive className="h-5 w-5 shrink-0 text-brand-terracotta" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{file.name}</p>
+                  <p className="text-xs text-slate-500">
+                    {formatSize(file.size)}
+                    {validation && ` · made ${formatDate(validation.createdAt)}`}
+                  </p>
+                </div>
+                <button onClick={resetRestore} className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600 dark:hover:bg-slate-700" title="Choose another file">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {checkStatus === 'loading' && (
+                <div className="flex flex-1 items-center justify-center gap-2 py-6 text-sm text-slate-500">
+                  <Loader2 className="h-5 w-5 animate-spin" /> Checking file…
+                </div>
+              )}
+              {checkStatus === 'error' && <div className="mt-3"><Alert tone="error">{checkError}</Alert></div>}
+              {validation && (
+                <ul className="mt-2 divide-y divide-slate-100 dark:divide-slate-800">
+                  <Check ok icon={Lock} label="Unlocked" detail="Encrypted with this system’s key" />
+                  <Check ok={validation.checksumMatch} icon={FileCheck2} label="Not damaged" detail={validation.checksumMatch ? 'Fingerprint matches' : 'File content has changed'} />
+                  <Check
+                    ok={validation.restorable !== false}
+                    icon={PackageCheck}
+                    label="Complete"
+                    detail={validation.restorable !== false ? `${validation.tableCount ?? '?'} tables inside` : 'Missing table data, can’t restore'}
+                  />
+                  <Check
+                    ok={validation.schemaMatches !== false}
+                    warn
+                    icon={GitCompareArrows}
+                    label="Same app version"
+                    detail={validation.schemaMatches !== false ? 'Matches the current database' : 'Made with a different app version'}
+                  />
+                </ul>
+              )}
+
+              <div className="mt-auto pt-4">
+                <button
+                  onClick={() => setShowConfirm(true)}
+                  disabled={!canRestore}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-brand-terracotta to-brand-orange px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:brightness-105 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <RotateCcw className="h-5 w-5" /> Restore this backup <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {restoreStatus === 'success' && (
+            <div className="mt-3">
+              <Alert tone="success">
+                <p className="font-semibold">Data restored</p>
+                <p className="text-xs opacity-80">Safety copy saved as {safetyFile}. It’s in the history below.</p>
+                <button onClick={() => window.location.reload()} className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold underline">
+                  <RefreshCw className="h-3.5 w-3.5" /> Reload app to see restored data
+                </button>
+              </Alert>
+            </div>
+          )}
+          {restoreStatus === 'error' && <div className="mt-3"><Alert tone="error">{restoreMsg}</Alert></div>}
+        </section>
+      </div>
+
+      {/* ── History ── */}
+      <section className="card-premium p-0 hover:shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 dark:border-slate-800">
+          <div className="flex items-center gap-2">
+            <History className="h-5 w-5 text-brand-terracotta" />
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">History</h2>
           </div>
-        )}
-      </section>
-
-      {/* ── Backup History ────────────────────────────────────────────── */}
-      <section className="card-glass rounded-2xl border border-slate-700/60 p-6">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-white flex items-center gap-2">
-            <Clock className="h-4 w-4 text-brand-orange" />
-            Backup History
-          </h2>
-          <button
-            id="btn-refresh-history"
-            onClick={loadHistory}
-            disabled={historyLoading}
-            className="flex items-center gap-1.5 text-xs font-semibold text-brand-orange hover:text-brand-sand transition disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${historyLoading ? 'animate-spin' : ''}`} />
-            {historyLoaded ? 'Refresh' : 'Load History'}
+          <button onClick={loadHistory} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800" title="Refresh">
+            <RefreshCw className={`h-4 w-4 ${historyStatus === 'loading' ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
-        {historyError && (
-          <div className="text-xs text-red-400 py-4">{historyError}</div>
-        )}
-
-        {!historyLoaded && !historyLoading && !historyError && (
-          <div className="flex items-center gap-2 text-xs text-slate-500 py-4">
-            <Info className="h-4 w-4" />
-            Click &ldquo;Load History&rdquo; to see backup records.
+        {historyStatus === 'error' && <div className="p-6"><Alert tone="error">Could not load history.</Alert></div>}
+        {historyStatus !== 'error' && records.length === 0 && (
+          <div className="flex flex-col items-center gap-2 px-6 py-10 text-center text-sm text-slate-500">
+            <HardDrive className="h-8 w-8 text-slate-300 dark:text-slate-600" />
+            {historyStatus === 'loading' ? 'Loading…' : 'No backups yet. Make your first one above.'}
           </div>
         )}
-
-        {historyLoading && (
-          <div className="flex items-center gap-2 text-xs text-slate-400 py-4">
-            <Loader2 className="h-4 w-4 animate-spin text-brand-orange" />
-            Loading backup history…
-          </div>
-        )}
-
-        {historyLoaded && records.length === 0 && (
-          <p className="text-xs text-slate-500 py-4">No backup records found.</p>
-        )}
-
-        {records.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-slate-700 text-slate-400">
-                  <th className="text-left py-2 pr-4 font-medium">File Name</th>
-                  <th className="text-left py-2 pr-4 font-medium">Type</th>
-                  <th className="text-left py-2 pr-4 font-medium">Date</th>
-                  <th className="text-left py-2 pr-4 font-medium">Schema</th>
-                  <th className="text-left py-2 font-medium">Created By</th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.map((r) => (
-                  <tr key={r.id} className="border-b border-slate-800 hover:bg-slate-800/30 transition">
-                    <td className="py-2.5 pr-4 font-mono text-slate-300 max-w-[220px] truncate" title={r.fileName}>
-                      {r.fileName}
-                    </td>
-                    <td className="py-2.5 pr-4">
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          r.backupType === 'MANUAL'
-                            ? 'bg-brand-orange/20 text-brand-orange'
-                            : 'bg-slate-700 text-slate-300'
-                        }`}
-                      >
-                        {r.backupType === 'MANUAL' ? 'Manual' : 'Safety'}
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-4 text-slate-300">{formatDate(r.createdAt)}</td>
-                    <td className="py-2.5 pr-4 font-mono text-slate-400 text-xs">{r.schemaVersion}</td>
-                    <td className="py-2.5 text-slate-400">{r.createdBy.username}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+          {records.map((r) => {
+            const safety = r.backupType === 'PRE_RESTORE_SAFETY';
+            return (
+              <li key={r.id} className="flex items-center gap-4 px-6 py-3">
+                <div
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                    safety ? 'bg-amber-50 text-amber-600 dark:bg-amber-950/50 dark:text-amber-400' : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400'
+                  }`}
+                >
+                  {safety ? <ShieldCheck className="h-5 w-5" /> : <CloudDownload className="h-5 w-5" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{safety ? 'Safety copy (before restore)' : 'Backup'}</p>
+                  <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                    {formatDate(r.createdAt)} · {timeAgo(r.createdAt)}
+                    {r.createdBy?.username && ` · by ${r.createdBy.username}`}
+                  </p>
+                </div>
+                {r.fileAvailable ? (
+                  <button
+                    onClick={() => downloadRecord(r)}
+                    disabled={downloadingId === r.id}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-brand-orange hover:text-brand-terracotta disabled:opacity-50 dark:border-slate-700 dark:text-slate-300"
+                    title="Download this backup"
+                  >
+                    {downloadingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                    <span className="hidden sm:inline">Download</span>
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-slate-400" title="The file is not stored on the server">Not on server</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       </section>
 
-      {/* Confirm Restore Modal */}
-      {showConfirm && validationResult && restoreFile && (
-        <ConfirmModal
-          fileName={restoreFile.name}
-          validation={validationResult}
-          onConfirm={handleRestoreConfirm}
-          onCancel={() => setShowConfirm(false)}
-          isRestoring={restoreStatus === 'loading'}
-        />
+      {showConfirm && validation && file && (
+        <ConfirmRestore fileName={file.name} validation={validation} busy={restoreStatus === 'loading'} onConfirm={handleRestore} onCancel={() => setShowConfirm(false)} />
       )}
     </div>
   );

@@ -4,16 +4,15 @@
  * Unit tests for the crypto utilities and BackupService validation logic.
  * Integration tests for the backup API routes.
  *
- * NOTE: Tests that require a live mysqldump / mysql CLI (actual backup creation
- * and restore) are marked with `.skipIf(process.env.CI !== 'true' && !process.env.DATABASE_URL_TEST)`
- * because a real DB connection is needed. The validation, decryption, checksum,
- * and route authorization paths are tested without a DB.
+ * NOTE: Backup creation/restore run in-process against the live DB and are
+ * verified manually / end-to-end. The SQL splitter, validation, decryption,
+ * checksum and route authorization paths are tested here without a DB.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import { app } from '../src/app.js';
 import { encrypt, decrypt, sha256, deriveKey } from '../src/utils/crypto.js';
-import { BackupService } from '../src/services/backup.service.js';
+import { BackupService, splitSqlStatements, assertRestorableDump } from '../src/services/backup.service.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Unit tests: crypto.ts
@@ -73,7 +72,7 @@ describe('BackupService.validateBackup', () => {
 
   /** Build a minimal valid .ubak buffer for testing */
   function buildValidBackupBuffer(overrides: Partial<Record<string, unknown>> = {}): Buffer {
-    const dump = 'SELECT 1; -- test dump';
+    const dump = 'DROP TABLE IF EXISTS `t`;\nCREATE TABLE `t` (id int);\nINSERT INTO `t` (`id`) VALUES\n(\'1\');';
     const checksum = sha256(Buffer.from(dump, 'utf8'));
     const payload = {
       version: '1',
@@ -89,6 +88,7 @@ describe('BackupService.validateBackup', () => {
   beforeEach(() => {
     // Patch env to inject a test key
     vi.stubEnv('BACKUP_ENCRYPTION_KEY', KEY);
+    vi.spyOn(BackupService as any, 'getSchemaVersion').mockResolvedValue('20240101_init');
   });
 
   it('validates a well-formed backup file successfully', async () => {
@@ -97,6 +97,7 @@ describe('BackupService.validateBackup', () => {
     expect(result.valid).toBe(true);
     expect(result.checksumMatch).toBe(true);
     expect(result.schemaVersion).toBe('20240101_init');
+    expect(result.schemaMatches).toBe(true);
   });
 
   it('returns checksumMatch=false when dump is tampered', async () => {
@@ -159,6 +160,11 @@ describe('Backup API routes — authorization', () => {
     expect(res.status).toBe(401);
   });
 
+  it('GET /api/v1/backups/:id/download returns 401 without authentication', async () => {
+    const res = await request(app).get('/api/v1/backups/some-id/download');
+    expect(res.status).toBe(401);
+  });
+
   it('POST /api/v1/backups/restore returns 401 without authentication', async () => {
     const res = await request(app)
       .post('/api/v1/backups/restore')
@@ -180,5 +186,63 @@ describe('BackupService — missing BACKUP_ENCRYPTION_KEY', () => {
     await expect(BackupService.createBackup('user-id', 'MANUAL')).rejects.toMatchObject({
       code: 'CONFIG_ERROR',
     });
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Unit tests: SQL statement splitter used by restore
+// ──────────────────────────────────────────────────────────────────────────────
+describe('splitSqlStatements', () => {
+  it('splits simple statements and drops empty ones', () => {
+    expect(splitSqlStatements('SET A=1;\n\nSET B=2;;')).toEqual(['SET A=1', 'SET B=2']);
+  });
+
+  it('keeps semicolons, newlines and escaped quotes inside string literals', () => {
+    const sql = "INSERT INTO t VALUES ('a;b','it\\'s','line1\nline2;','O''Brien');\nSELECT 1;";
+    const out = splitSqlStatements(sql);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toBe("INSERT INTO t VALUES ('a;b','it\\'s','line1\nline2;','O''Brien')");
+  });
+
+  it('handles backtick identifiers containing semicolons', () => {
+    expect(splitSqlStatements('CREATE TABLE `we;ird` (id int);')).toEqual(['CREATE TABLE `we;ird` (id int)']);
+  });
+
+  it('strips line and block comments but keeps MySQL versioned comments', () => {
+    const sql = [
+      '-- Uma Bhavan backup',
+      '# hash comment',
+      '/* plain block; comment */',
+      "/*!40101 SET NAMES utf8mb4 */;",
+      'DROP TABLE IF EXISTS `t`;',
+    ].join('\n');
+    expect(splitSqlStatements(sql)).toEqual(['/*!40101 SET NAMES utf8mb4 */', 'DROP TABLE IF EXISTS `t`']);
+  });
+
+  it('does not treat "--" without a following space as a comment', () => {
+    expect(splitSqlStatements('SELECT 5--3;')).toEqual(['SELECT 5--3']);
+  });
+});
+
+describe('assertRestorableDump', () => {
+  const ok = ['SET NAMES utf8mb4', 'DROP TABLE IF EXISTS `t`', 'CREATE TABLE `t` (id int)', "INSERT INTO `t` VALUES ('1')"];
+
+  it('accepts a well-formed dump', () => {
+    expect(() => assertRestorableDump(ok)).not.toThrow();
+  });
+
+  it('accepts mysqldump-style SET comments between DROP and CREATE', () => {
+    expect(() =>
+      assertRestorableDump(['DROP TABLE IF EXISTS `t`', '/*!40101 SET @saved_cs_client = @@character_set_client */', 'CREATE TABLE `t` (id int)'])
+    ).not.toThrow();
+  });
+
+  it('rejects a DROP that is not followed by its CREATE (the "undefined" case)', () => {
+    expect(() => assertRestorableDump(['DROP TABLE IF EXISTS `t`', 'undefined'])).toThrow(/invalid statement|never recreated/);
+    expect(() => assertRestorableDump(['DROP TABLE IF EXISTS `a`', 'CREATE TABLE `b` (id int)'])).toThrow(/never recreated/);
+  });
+
+  it('rejects a dump with no tables', () => {
+    expect(() => assertRestorableDump(['SELECT 1'])).toThrow(/no tables/);
   });
 });

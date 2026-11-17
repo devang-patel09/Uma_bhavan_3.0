@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Sun,
   Moon,
-  Search,
-  Building2,
+  Keyboard,
   ShieldCheck,
   User as UserIcon,
   LogOut,
@@ -11,10 +10,10 @@ import {
 import { useAuth } from '../../context/AuthContext.js';
 
 interface HeaderProps {
-  onSearchClick?: () => void;
+  onShortcutsClick?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onSearchClick }) => {
+export const Header: React.FC<HeaderProps> = ({ onShortcutsClick }) => {
   const { user, logout } = useAuth();
 
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -39,10 +38,10 @@ export const Header: React.FC<HeaderProps> = ({ onSearchClick }) => {
     <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-md dark:border-slate-800/80 dark:bg-slate-900/90 sm:px-6">
       {/* Brand Identity */}
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-brand-terracotta to-brand-orange text-white shadow-glow">
-          <Building2 className="h-5 w-5" />
+        <div className="flex h-11 items-center rounded-lg bg-white px-2 py-1 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700">
+          <img src="/logo.png" alt="Uma Bhavan, Anand" className="h-9 w-auto" />
         </div>
-        <div>
+        <div className="hidden sm:block">
           <div className="flex items-center gap-2">
             <h1 className="text-base font-bold tracking-tight text-slate-900 dark:text-white">
               UMA BHAVAN
@@ -57,25 +56,18 @@ export const Header: React.FC<HeaderProps> = ({ onSearchClick }) => {
         </div>
       </div>
 
-      {/* Center / Global Search Trigger */}
-      <div className="hidden max-w-md flex-1 px-8 md:block">
-        <button
-          type="button"
-          onClick={onSearchClick}
-          className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2 text-sm text-slate-500 shadow-inner transition hover:border-slate-300 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400 dark:hover:bg-slate-900"
-        >
-          <div className="flex items-center gap-2">
-            <Search className="h-4 w-4 text-brand-terracotta" />
-            <span>Search member, firm, code, family ID...</span>
-          </div>
-          <kbd className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] font-mono text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
-            Ctrl+K
-          </kbd>
-        </button>
-      </div>
-
       {/* Right Actions */}
       <div className="flex items-center gap-2 sm:gap-3">
+        {/* Keyboard shortcuts help */}
+        <button
+          type="button"
+          onClick={onShortcutsClick}
+          className="hidden rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200 sm:block"
+          title="Keyboard shortcuts (?)"
+        >
+          <Keyboard className="h-5 w-5" />
+        </button>
+
         {/* Dark/Light Toggle */}
         <button
           type="button"

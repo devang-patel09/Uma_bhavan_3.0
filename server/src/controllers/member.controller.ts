@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { MemberService } from '../services/member.service.js';
+import { parsePagination } from '../utils/pagination.js';
 import {
   createFamilySchema,
   updateFamilySchema,
@@ -15,8 +16,7 @@ export class MemberController {
       const memberType = req.query.memberType as ('PERMANENT' | 'NOMINAL') | undefined;
       const surnameId = req.query.surnameId as string | undefined;
       const firmId = req.query.firmId as string | undefined;
-      const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
-      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+      const { page, limit } = parsePagination(req.query);
 
       const result = await MemberService.getAll({
         search,

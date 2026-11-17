@@ -30,6 +30,22 @@
   }
 }
 
+/* Chart palette (validated: CVD-safe adjacent pairs, light + dark steps) */
+:root {
+  --series-1: #2a78d6; /* blue */
+  --series-2: #eb6834; /* orange (brand) */
+  --series-3: #1baf7a; /* aqua */
+  --chart-grid: #e2e8f0;
+  --chart-surface: #ffffff;
+}
+.dark {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --chart-grid: #1e293b;
+  --chart-surface: #0f172a;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
