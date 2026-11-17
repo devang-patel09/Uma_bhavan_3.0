@@ -18,6 +18,9 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { api } from '../services/api.js';
+import { printFamily } from '../utils/print.js';
+import { Pagination } from '../components/Pagination.js';
+import { useEscapeKey } from '../hooks/useHotkeys.js';
 
 const BLOOD_GROUP_LABELS: Record<string, string> = {
   A_POSITIVE: 'A+', A_NEGATIVE: 'A-',
@@ -83,6 +86,10 @@ type MigrateFlow = 'EXISTING_FIRM' | 'NEW_FIRM' | null;
 interface SubAreaOption { id: string; name: string; }
 interface AreaOption { id: string; name: string; subAreas: SubAreaOption[]; }
 
+/** Parental (maiden) surname only applies to married women. */
+const allowsParentalSurname = (gender: string, maritalStatus: string) =>
+  gender === 'FEMALE' && maritalStatus === 'MARRIED';
+
 const inputCls = 'mt-1 w-full rounded-lg border border-slate-300 bg-white py-2 px-3 text-sm text-slate-800 focus:border-brand-orange focus:outline-none focus:ring-1 focus:ring-brand-orange dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100';
 const labelCls = 'block text-xs font-semibold text-slate-700 dark:text-slate-300';
 
@@ -96,6 +103,12 @@ export const Members: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Pagination (server-side)
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   // Modal states
   const [showAddFamilyModal, setShowAddFamilyModal] = useState(false);
@@ -154,18 +167,27 @@ export const Members: React.FC = () => {
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const params: Record<string, string> = {};
+      const params: Record<string, string | number> = { page, limit };
       if (filterType !== 'ALL') params.memberType = filterType;
       if (searchTerm) params.search = searchTerm;
 
       const [famRes, surRes, firmsRes, areasRes] = await Promise.all([
         api.get('/v1/members', { params }),
         api.get('/v1/surnames'),
-        api.get('/v1/firms'),
+        api.get('/v1/firms', { params: { limit: 1000 } }), // full list for dropdowns
         api.get('/v1/areas'),
       ]);
 
-      setFamilies(famRes.data.data.records ?? []);
+      const famData = famRes.data.data;
+      const records: FamilyRecord[] = famData.records ?? [];
+      // If the current page became empty (e.g. after a delete), step back one page.
+      if (records.length === 0 && page > 1) {
+        setPage(page - 1);
+        return;
+      }
+      setFamilies(records);
+      setTotal(famData.total ?? records.length);
+      setTotalPages(famData.totalPages ?? 1);
       setSurnames(surRes.data.data ?? []);
       const rawFirms = firmsRes.data.data.firms ?? firmsRes.data.data ?? [];
       setFirms(rawFirms.map((f: any) => ({
@@ -185,15 +207,26 @@ export const Members: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [filterType, searchTerm]);
+  }, [filterType, searchTerm, page, limit]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Selecting a firm pre-fills the Family Head Name from that firm. A name the
+  // user typed by hand is kept; only an empty or previously auto-filled value is replaced.
+  const selectFirmForFamily = (newFirmId: string, currentHeadName = familyHeadName) => {
+    const prevFirmHead = firms.find((f) => f.id === firmId)?.familyHeadName ?? '';
+    const nextFirmHead = firms.find((f) => f.id === newFirmId)?.familyHeadName ?? '';
+    setFirmId(newFirmId);
+    if (!currentHeadName.trim() || currentHeadName === prevFirmHead) {
+      setFamilyHeadName(nextFirmHead);
+    }
+  };
+
   const openAddFamily = () => {
     setFamilyId(`FAM-${Math.floor(1000 + Math.random() * 9000)}`);
-    setFamilyHeadName('');
     setSurnameId(surnames[0]?.id || '');
-    setFirmId(firms[0]?.id || '');
+    setFamilyHeadName('');
+    selectFirmForFamily(firms[0]?.id || '', '');
     setHomeAddress('');
     setError(null);
     setShowAddFamilyModal(true);
@@ -247,7 +280,9 @@ export const Members: React.FC = () => {
       mobile: newMemMobile,
       bloodGroup: newMemBloodGroup,
       maritalStatus: newMemMaritalStatus,
-      parentalSurnameId: newMemParentalSurnameId || null,
+      parentalSurnameId: allowsParentalSurname(newMemGender, newMemMaritalStatus)
+        ? newMemParentalSurnameId || null
+        : null,
       allowDuplicate: false,
     };
 
@@ -293,7 +328,9 @@ export const Members: React.FC = () => {
         bloodGroup: editMemBloodGroup,
         mobile: editMemMobile,
         maritalStatus: editMemMaritalStatus,
-        parentalSurnameId: editMemParentalSurnameId || null,
+        parentalSurnameId: allowsParentalSurname(editingMember.gender, editMemMaritalStatus)
+          ? editMemParentalSurnameId || null
+          : null,
       });
       setEditingMember(null);
       const res = await api.get(`/v1/members/${viewingFamily.id}`);
@@ -323,7 +360,7 @@ export const Members: React.FC = () => {
   const loadDestFamilies = async (fId: string) => {
     if (!fId) { setDestFamilies([]); setDestFamilyId(''); return; }
     try {
-      const res = await api.get('/v1/members', { params: { firmId: fId } });
+      const res = await api.get('/v1/members', { params: { firmId: fId, limit: 1000 } });
       const recs: FamilyOption[] = (res.data.data.records ?? []).map((r: any) => ({
         id: r.id,
         memberCode: r.memberCode,
@@ -423,7 +460,16 @@ export const Members: React.FC = () => {
     }
   };
 
-  const handlePrintFamily = () => window.print();
+  // Esc closes the top-most popup (child popups register after their parent)
+  useEscapeKey(() => setShowAddFamilyModal(false), showAddFamilyModal);
+  useEscapeKey(() => setViewingFamily(null), viewingFamily !== null);
+  useEscapeKey(() => setMigratingFamily(null), migratingFamily !== null);
+  useEscapeKey(() => setShowAddMemberModal(false), showAddMemberModal);
+  useEscapeKey(() => setEditingMember(null), editingMember !== null);
+
+  const handlePrintFamily = () => {
+    if (viewingFamily) printFamily(viewingFamily);
+  };
 
   return (
     <div className="space-y-6">
@@ -438,7 +484,7 @@ export const Members: React.FC = () => {
             Permanent (M001…) &amp; Nominal (N001…) family records with Blood Group, Parental Surname, and Migration
           </p>
         </div>
-        <button onClick={openAddFamily} className="btn-primary">
+        <button onClick={openAddFamily} className="btn-primary" data-shortcut="new" title="Add Family (N)">
           <Plus className="h-4 w-4" />
           <span>Add Family</span>
         </button>
@@ -458,7 +504,7 @@ export const Members: React.FC = () => {
             {(['ALL', 'PERMANENT', 'NOMINAL'] as const).map((t) => (
               <button
                 key={t}
-                onClick={() => setFilterType(t)}
+                onClick={() => { setFilterType(t); setPage(1); }}
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
                   filterType === t
                     ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
@@ -474,9 +520,10 @@ export const Members: React.FC = () => {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by Member Code, Head Name, Family ID, Mobile…"
+            placeholder="Search by Member Code, Head Name, Family ID, Mobile…  ( / )"
+            data-shortcut="search"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
             className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-4 text-sm placeholder-slate-400 focus:border-brand-orange focus:outline-none focus:ring-1 focus:ring-brand-orange dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           />
         </div>
@@ -505,7 +552,12 @@ export const Members: React.FC = () => {
                 <tr><td colSpan={8} className="p-8 text-center text-slate-500">No family records found.</td></tr>
               ) : (
                 families.map((fam) => (
-                  <tr key={fam.id} className="transition hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                  <tr
+                    key={fam.id}
+                    onClick={() => setViewingFamily(fam)}
+                    className="cursor-pointer transition hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                    title="Click to manage family"
+                  >
                     <td className="px-4 py-3 font-mono font-bold text-brand-terracotta">{fam.memberCode}</td>
                     <td className="px-4 py-3">
                       <span className={fam.memberType === 'PERMANENT' ? 'badge-permanent' : 'badge-nominal'}>
@@ -517,7 +569,7 @@ export const Members: React.FC = () => {
                     <td className="px-4 py-3 text-xs text-slate-500 max-w-[180px] truncate">{fam.firmName} ({fam.firmCode})</td>
                     <td className="px-4 py-3 text-center font-semibold">{fam.totalMembers || fam.members?.length || 0}</td>
                     <td className="px-4 py-3 text-center font-bold text-brand-terracotta">{fam.male18PlusCount}</td>
-                    <td className="px-4 py-3 text-right space-x-1 no-print">
+                    <td className="px-4 py-3 text-right space-x-1 no-print" onClick={(e) => e.stopPropagation()}>
                       <button onClick={() => setViewingFamily(fam)} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition" title="Manage Family">
                         <Eye className="h-4 w-4" />
                       </button>
@@ -534,6 +586,15 @@ export const Members: React.FC = () => {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          limit={limit}
+          onPageChange={setPage}
+          onLimitChange={(l) => { setLimit(l); setPage(1); }}
+          itemLabel="families"
+        />
       </div>
 
       {/* ── Add Family Modal ── */}
@@ -551,7 +612,7 @@ export const Members: React.FC = () => {
               {/* Firm – drives memberType */}
               <div>
                 <label className={labelCls}>Associated Firm * <span className="font-normal text-slate-400">(Classification is inherited from Firm Type)</span></label>
-                <select required value={firmId} onChange={(e) => setFirmId(e.target.value)} className={inputCls}>
+                <select required value={firmId} onChange={(e) => selectFirmForFamily(e.target.value)} className={inputCls}>
                   <option value="">Select Firm</option>
                   {firms.map((f) => (
                     <option key={f.id} value={f.id}>{f.firmCode} – {f.firmName} ({f.firmType})</option>
@@ -606,13 +667,6 @@ export const Members: React.FC = () => {
       {viewingFamily && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-            {/* Print header */}
-            <div className="print-only mb-4">
-              <p className="text-xs text-gray-400">Uma Bhavan Community Management System</p>
-              <h2 className="text-lg font-bold text-black">{viewingFamily.memberCode} — {viewingFamily.familyHeadName}</h2>
-              <p className="text-xs">{viewingFamily.firmName} · {viewingFamily.memberType} · Printed {new Date().toLocaleDateString('en-IN')}</p>
-            </div>
-
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800 no-print">
               <div className="flex items-center gap-3">
                 <span className="font-mono text-sm font-bold text-brand-terracotta">{viewingFamily.memberCode}</span>
@@ -736,7 +790,7 @@ export const Members: React.FC = () => {
                     <option value="MARRIED">Married</option>
                   </select>
                 </div>
-                {newMemGender === 'FEMALE' && (
+                {allowsParentalSurname(newMemGender, newMemMaritalStatus) && (
                   <div>
                     <label className={labelCls}>Parental Surname</label>
                     <select value={newMemParentalSurnameId} onChange={(e) => setNewMemParentalSurnameId(e.target.value)} className={inputCls}>
@@ -792,7 +846,7 @@ export const Members: React.FC = () => {
                     <option value="MARRIED">Married</option>
                   </select>
                 </div>
-                {editingMember.gender === 'FEMALE' && (
+                {allowsParentalSurname(editingMember.gender, editMemMaritalStatus) && (
                   <div>
                     <label className={labelCls}>Parental Surname</label>
                     <select value={editMemParentalSurnameId} onChange={(e) => setEditMemParentalSurnameId(e.target.value)} className={inputCls}>

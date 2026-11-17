@@ -19,6 +19,7 @@
     "db:migrate": "npm run db:migrate --workspace=server",
     "db:generate": "npm run db:generate --workspace=server",
     "db:seed": "npm run db:seed --workspace=server",
+    "db:seed:demo": "npm run db:seed:demo --workspace=server",
     "db:studio": "npm run db:studio --workspace=server"
   },
   "devDependencies": {

@@ -8,7 +8,6 @@ import { Members } from './pages/Members.js';
 import { Receipts } from './pages/Receipts.js';
 import { NiyariReport } from './pages/NiyariReport.js';
 import { Masters } from './pages/Masters.js';
-import { Reports } from './pages/Reports.js';
 import { DataOperations } from './pages/DataOperations.js';
 import { AdminAudit } from './pages/AdminAudit.js';
 import { BackupRestore } from './pages/BackupRestore.js';
@@ -55,7 +54,6 @@ const AppRoutes: React.FC = () => {
         <Route path="receipts" element={<Receipts />} />
         <Route path="niyari" element={<NiyariReport />} />
         <Route path="masters" element={<Masters />} />
-        <Route path="reports" element={<Reports />} />
         <Route path="data-ops" element={<DataOperations />} />
         <Route path="backup" element={<BackupRestore />} />
         <Route path="admin" element={<AdminAudit />} />

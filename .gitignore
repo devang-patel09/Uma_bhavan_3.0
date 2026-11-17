@@ -14,3 +14,6 @@ backups/
 scratch/
 coverage/
 .prisma/
+
+# Local env file without the leading dot (contains secrets)
+server/env

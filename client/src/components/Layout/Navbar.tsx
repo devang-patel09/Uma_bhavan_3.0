@@ -8,7 +8,6 @@ import {
   FileSpreadsheet,
   Database,
   Layers,
-  FileText,
   Shield,
   HardDrive,
 } from 'lucide-react';
@@ -21,14 +20,13 @@ export const Navbar: React.FC = () => {
     { to: '/receipts', label: 'Receipts', icon: Receipt },
     { to: '/niyari', label: 'Niyari Report', icon: FileSpreadsheet },
     { to: '/masters', label: 'Area & Surname', icon: Layers },
-    { to: '/reports', label: 'Reports', icon: FileText },
     { to: '/data-ops', label: 'Import / Export', icon: Database },
     { to: '/backup', label: 'Backup & Restore', icon: HardDrive },
     { to: '/admin', label: 'Audit Trail', icon: Shield },
   ];
 
   return (
-    <nav className="border-b border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <nav className="relative z-20 border-b border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="mx-auto max-w-7xl px-4 sm:px-6">
         <div className="flex space-x-1 overflow-x-auto py-2 scrollbar-none">
           {navItems.map((item) => {

@@ -14,6 +14,9 @@ import {
   User,
 } from 'lucide-react';
 import { api } from '../services/api.js';
+import { printFirm, printFirmList } from '../utils/print.js';
+import { Pagination } from '../components/Pagination.js';
+import { useEscapeKey } from '../hooks/useHotkeys.js';
 
 interface SubAreaItem {
   id: string;
@@ -207,6 +210,12 @@ export const Firms: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Pagination (server-side)
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
   // Modal states
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingFirm, setEditingFirm] = useState<FirmItem | null>(null);
@@ -228,7 +237,7 @@ export const Firms: React.FC = () => {
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const params: Record<string, string> = {};
+      const params: Record<string, string | number> = { page, limit };
       if (searchTerm) params.search = searchTerm;
       if (selectedAreaId) params.areaId = selectedAreaId;
 
@@ -237,7 +246,16 @@ export const Firms: React.FC = () => {
         api.get('/v1/areas'),
       ]);
 
-      setFirms(firmsRes.data.data.firms ?? firmsRes.data.data ?? []);
+      const data = firmsRes.data.data;
+      const list: FirmItem[] = data.firms ?? data ?? [];
+      // If the current page became empty (e.g. after a delete), step back one page.
+      if (list.length === 0 && page > 1) {
+        setPage(page - 1);
+        return;
+      }
+      setFirms(list);
+      setTotal(data.total ?? list.length);
+      setTotalPages(data.totalPages ?? 1);
       setAreas(
         (areasRes.data.data ?? []).map((a: any) => ({
           id: a.id,
@@ -250,7 +268,7 @@ export const Firms: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [searchTerm, selectedAreaId]);
+  }, [searchTerm, selectedAreaId, page, limit]);
 
   useEffect(() => {
     fetchData();
@@ -343,10 +361,26 @@ export const Firms: React.FC = () => {
     }
   };
 
-  const handlePrint = (firm: FirmItem) => {
-    setViewingFirm(firm);
-    setTimeout(() => window.print(), 300);
+  const handlePrint = (firm: FirmItem) => printFirm(firm);
+
+  const handlePrintList = async () => {
+    const areaName = areas.find((a) => a.id === selectedAreaId)?.name;
+    const parts = [areaName, searchTerm && `Search: "${searchTerm}"`].filter(Boolean);
+    // Print every matching firm, not just the current page.
+    const params: Record<string, string | number> = { page: 1, limit: 1000 };
+    if (searchTerm) params.search = searchTerm;
+    if (selectedAreaId) params.areaId = selectedAreaId;
+    try {
+      const res = await api.get('/v1/firms', { params });
+      printFirmList(res.data.data.firms ?? [], parts.join(' • ') || undefined);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load firms for printing.');
+    }
   };
+
+  useEscapeKey(() => setShowAddModal(false), showAddModal);
+  useEscapeKey(() => setEditingFirm(null), editingFirm !== null);
+  useEscapeKey(() => setViewingFirm(null), viewingFirm !== null);
 
   // Shared props for the top-level FirmFormFields component
   const formFieldProps: FirmFormFieldsProps = {
@@ -374,21 +408,15 @@ export const Firms: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => window.print()} className="btn-secondary">
+          <button onClick={handlePrintList} className="btn-secondary">
             <Printer className="h-4 w-4" />
             <span>Print List</span>
           </button>
-          <button onClick={openCreate} className="btn-primary">
+          <button onClick={openCreate} className="btn-primary" data-shortcut="new" title="Add New Firm (N)">
             <Plus className="h-4 w-4" />
             <span>Add New Firm</span>
           </button>
         </div>
-      </div>
-
-      {/* Print-only header */}
-      <div className="print-only">
-        <h2 className="text-xl font-bold text-black">Uma Bhavan – Firm Master</h2>
-        <p className="text-xs text-gray-500">Printed on {new Date().toLocaleDateString('en-IN')}</p>
       </div>
 
       {error && (
@@ -404,15 +432,16 @@ export const Firms: React.FC = () => {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by Code, Name, Address…"
+            placeholder="Search by Code, Name, Address…  ( / )"
+            data-shortcut="search"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
             className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-4 text-sm placeholder-slate-400 focus:border-brand-orange focus:outline-none focus:ring-1 focus:ring-brand-orange dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           />
         </div>
         <select
           value={selectedAreaId}
-          onChange={(e) => setSelectedAreaId(e.target.value)}
+          onChange={(e) => { setSelectedAreaId(e.target.value); setPage(1); }}
           className="rounded-lg border border-slate-300 bg-white py-2 px-3 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
         >
           <option value="">All Areas</option>
@@ -455,7 +484,12 @@ export const Firms: React.FC = () => {
                 </tr>
               ) : (
                 firms.map((f) => (
-                  <tr key={f.id} className="transition hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                  <tr
+                    key={f.id}
+                    onClick={() => setViewingFirm(f)}
+                    className="cursor-pointer transition hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                    title="Click to view details"
+                  >
                     <td className="px-4 py-3 font-mono font-bold text-brand-terracotta">{f.firmCode}</td>
                     <td className="px-4 py-3">
                       <span className={f.firmType === 'PERMANENT' ? 'badge-permanent' : 'badge-nominal'}>
@@ -481,7 +515,10 @@ export const Firms: React.FC = () => {
                         {f.familiesCount}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right space-x-1 no-print">
+                    <td
+                      className="px-4 py-3 text-right space-x-1 no-print"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <button
                         onClick={() => setViewingFirm(f)}
                         className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 transition"
@@ -517,6 +554,15 @@ export const Firms: React.FC = () => {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          limit={limit}
+          onPageChange={setPage}
+          onLimitChange={(l) => { setLimit(l); setPage(1); }}
+          itemLabel="firms"
+        />
       </div>
 
       {/* Add Firm Modal */}
@@ -592,12 +638,6 @@ export const Firms: React.FC = () => {
       {viewingFirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 no-print">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-            {/* Print-only header */}
-            <div className="print-only border-b border-slate-200 pb-3 mb-4">
-              <p className="text-xs text-gray-400">Uma Bhavan Community Management System</p>
-              <h2 className="text-lg font-bold text-black">Firm Details — {viewingFirm.firmCode}</h2>
-            </div>
-
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800 no-print">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-sm font-bold text-brand-terracotta">{viewingFirm.firmCode}</span>
@@ -657,7 +697,7 @@ export const Firms: React.FC = () => {
             </div>
 
             <div className="mt-6 flex justify-end gap-2 no-print">
-              <button onClick={() => window.print()} className="btn-secondary text-xs">
+              <button onClick={() => printFirm(viewingFirm)} className="btn-secondary text-xs">
                 <Printer className="h-3.5 w-3.5" />
                 Print
               </button>

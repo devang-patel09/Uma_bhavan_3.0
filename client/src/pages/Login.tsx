@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Building2, Lock, User, Eye, EyeOff, ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
+import { Lock, User, Eye, EyeOff, ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.js';
 
 export const Login: React.FC = () => {
@@ -38,8 +38,8 @@ export const Login: React.FC = () => {
       <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-slate-900/80 p-8 shadow-2xl backdrop-blur-xl">
         {/* Top Logo and Title */}
         <div className="text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-terracotta to-brand-orange text-white shadow-glow">
-            <Building2 className="h-7 w-7" />
+          <div className="mx-auto inline-flex items-center justify-center rounded-2xl bg-white px-5 py-3 shadow-glow">
+            <img src="/logo.png" alt="Uma Bhavan, Anand" className="h-16 w-auto" />
           </div>
           <h1 className="mt-4 text-2xl font-black tracking-tight text-white">UMA BHAVAN</h1>
           <p className="mt-1 text-xs text-brand-sand font-medium uppercase tracking-wider">

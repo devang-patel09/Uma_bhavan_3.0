@@ -16,6 +16,12 @@ backupRouter.use(authenticate, authorize(['SUPER_ADMIN']));
 backupRouter.get('/', BackupController.listBackups);
 
 /**
+ * GET /api/v1/backups/:id/download
+ * Download a backup file kept on the server (manual or pre-restore safety backup).
+ */
+backupRouter.get('/:id/download', BackupController.downloadBackup);
+
+/**
  * POST /api/v1/backups
  * Create and download an encrypted backup (.ubak).
  */
