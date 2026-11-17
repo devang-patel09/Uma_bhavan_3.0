@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { api } from './api';
+import { api, resolveApiBaseUrl } from './api';
 
 describe('Client API Service', () => {
   const storageMock: Record<string, string> = {};
@@ -51,5 +51,22 @@ describe('Client API Service', () => {
     };
 
     await expect(errorHandler(fakeError)).rejects.toThrow('Custom operational error message');
+  });
+});
+
+describe('resolveApiBaseUrl', () => {
+  it('defaults to the same-origin /api proxy', () => {
+    expect(resolveApiBaseUrl(undefined)).toBe('/api');
+    expect(resolveApiBaseUrl('')).toBe('/api');
+  });
+  it('keeps a full URL that already ends in /api', () => {
+    expect(resolveApiBaseUrl('http://localhost:5000/api')).toBe('http://localhost:5000/api');
+    expect(resolveApiBaseUrl('https://x.example.com/api/')).toBe('https://x.example.com/api');
+  });
+  it('turns a bare Render host into an https /api URL', () => {
+    expect(resolveApiBaseUrl('uma-bhavan-api.onrender.com')).toBe('https://uma-bhavan-api.onrender.com/api');
+  });
+  it('appends /api to a URL without it', () => {
+    expect(resolveApiBaseUrl('https://api.example.com')).toBe('https://api.example.com/api');
   });
 });

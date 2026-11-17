@@ -1,7 +1,20 @@
 import axios from 'axios';
 
+/**
+ * Normalises the configured API base URL.
+ * Render injects the API service's bare host (e.g. "uma-bhavan-api.onrender.com"),
+ * so add https:// and the /api prefix when they're missing.
+ */
+export function resolveApiBaseUrl(raw?: string): string {
+  const value = (raw ?? '').trim().replace(/\/+$/, '');
+  if (!value) return '/api';
+  let url = /^https?:\/\//i.test(value) || value.startsWith('/') ? value : `https://${value}`;
+  if (!/\/api$/.test(url)) url = `${url}/api`;
+  return url;
+}
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL),
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',

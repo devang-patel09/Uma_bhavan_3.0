@@ -6,63 +6,94 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs on the same branch / PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# This is an npm workspaces monorepo: one package-lock.json at the root,
+# installed once with `npm ci`, scripts run per workspace.
 jobs:
   server-ci:
     name: Server Checks & Tests
     runs-on: ubuntu-latest
+    services:
+      # Several suites (receipts, end-to-end) talk to a real database.
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_password
+          MYSQL_DATABASE: uma_bhavan_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://root:ci_password@127.0.0.1:3306/uma_bhavan_ci
+      JWT_SECRET: ci-only-jwt-secret-not-used-anywhere-else
+      COOKIE_SECRET: ci-only-cookie-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
-          cache: 'npm'
-          cache-dependency-path: server/package-lock.json
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        working-directory: server
         run: npm ci
 
+      - name: Generate Prisma client
+        run: npm run db:generate --workspace=server
+
+      - name: Apply database migrations
+        run: npm run db:deploy --workspace=server
+
       - name: Lint
-        working-directory: server
-        run: npm run lint
+        run: npm run lint --workspace=server
 
       - name: Typecheck
-        working-directory: server
-        run: npm run typecheck
+        run: npm run typecheck --workspace=server
 
-      - name: Run Tests
-        working-directory: server
-        run: npm test
+      - name: Run tests
+        run: npm test --workspace=server
+
+      - name: Production build
+        run: npm run build --workspace=server
 
   client-ci:
     name: Client Checks & Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
-          cache: 'npm'
-          cache-dependency-path: client/package-lock.json
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        working-directory: client
         run: npm ci
 
       - name: Lint
-        working-directory: client
-        run: npm run lint
+        run: npm run lint --workspace=client
 
       - name: Typecheck
-        working-directory: client
-        run: npm run typecheck
+        run: npm run typecheck --workspace=client
 
-      - name: Run Tests
-        working-directory: client
-        run: npm test
+      - name: Run tests
+        run: npm test --workspace=client
 
-      - name: Production Build
-        working-directory: client
-        run: npm run build
+      - name: Production build
+        run: npm run build --workspace=client
